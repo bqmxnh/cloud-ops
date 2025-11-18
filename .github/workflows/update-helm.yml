@@ -1,7 +1,13 @@
 name: Update Helm Chart
 
 on:
-  workflow_call:
+  workflow_dispatch:       # <--- BẮT BUỘC (đỂ workflow khác có thể trigger)
+    inputs:
+      image_tag:
+        required: true
+        type: string
+
+  workflow_call:           # vẫn giữ để cho phép gọi từ workflow khác
     inputs:
       image_tag:
         required: true
@@ -12,29 +18,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+    - name: Checkout repo
+      uses: actions/checkout@v3
 
-      # ===========================
-      # Update image tag in Helm values
-      # ===========================
-      - name: Update Helm values with new image tag
-        run: |
-          sed -i "s|tag: .*|tag: \"${{ inputs.image_tag }}\"|g" values/api/values.yaml
+    - name: Update Helm values with new image tag
+      run: |
+        sed -i "s|tag: .*|tag: \"${{ inputs.image_tag }}\"|g" values/api/values.yaml
 
-      # ===========================
-      # Git commit changes
-      # ===========================
-      - name: Commit changes
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git add values/api/values.yaml
-          git commit -m "Update API image tag to ${{ inputs.image_tag }}" || echo "Nothing to commit"
+    - name: Commit changes
+      run: |
+        git config --global user.name "github-actions"
+        git config --global user.email "actions@github.com"
+        git add values/api/values.yaml
+        git commit -m "Update API image tag to ${{ inputs.image_tag }}" || echo "Nothing to commit"
 
-      # ===========================
-      # Push to repo
-      # ===========================
-      - name: Push changes
-        run: |
-          git push || echo "No changes to push"
+    - name: Push changes
+      run: |
+        git push || echo "No changes to push"
