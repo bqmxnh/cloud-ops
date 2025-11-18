@@ -5,9 +5,10 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/bqmxnh/ids-cloud-ops.git
-    targetRevision: HEAD
+    repoURL: https://github.com/bqmxnh/cloud-ops.git
+    targetRevision: main
     path: values/api
+
   destination:
     server: https://kubernetes.default.svc
     namespace: default

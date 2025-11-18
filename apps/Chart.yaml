@@ -1,5 +1,5 @@
 apiVersion: v2
-name: ids-cloud-ops
+name: ids-chart
 description: Root Helm chart deploying IDS API + MLflow (subcharts)
 type: application
 version: 1.0.0
