@@ -38,4 +38,5 @@ jobs:
           workflow: "Update Helm Chart"
           ref: "main"
           token: ${{ secrets.PAT_TOKEN }}
-          inputs: '{"image_tag": "${{ steps.vars.outputs.tag }}"}'
+          inputs: |
+            {"image_tag": "${{ steps.vars.outputs.tag }}"}
