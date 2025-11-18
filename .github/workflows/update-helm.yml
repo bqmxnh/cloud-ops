@@ -26,8 +26,8 @@ jobs:
 
     - name: Update Helm values with new image tag
       run: |
-        sed -i "s|tag: \".*\"|tag: \"${{ inputs.image_tag }}\"|g" values/api/values.yaml
-
+        sed -i 's|tag:.*|tag: "'"${{ inputs.image_tag }}"'"|g' values/api/values.yaml
+        
     - name: Commit changes
       run: |
         git config --global user.name "github-actions"
