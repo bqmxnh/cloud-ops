@@ -37,5 +37,5 @@ jobs:
         with:
           workflow: "Update Helm Chart"
           ref: "main"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
           inputs: '{"image_tag": "${{ steps.vars.outputs.tag }}"}'
