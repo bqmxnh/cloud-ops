@@ -1,13 +1,14 @@
 name: Update Helm Chart
 
 on:
-  workflow_dispatch:       # <--- BẮT BUỘC (đỂ workflow khác có thể trigger)
+  workflow_dispatch:
     inputs:
       image_tag:
+        description: "New Docker image tag"
         required: true
         type: string
 
-  workflow_call:           # vẫn giữ để cho phép gọi từ workflow khác
+  workflow_call:
     inputs:
       image_tag:
         required: true
@@ -20,10 +21,12 @@ jobs:
     steps:
     - name: Checkout repo
       uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.PAT_TOKEN }}   
 
     - name: Update Helm values with new image tag
       run: |
-        sed -i "s|tag: .*|tag: \"${{ inputs.image_tag }}\"|g" values/api/values.yaml
+        sed -i "s|tag: \".*\"|tag: \"${{ inputs.image_tag }}\"|g" values/api/values.yaml
 
     - name: Commit changes
       run: |
@@ -32,6 +35,6 @@ jobs:
         git add values/api/values.yaml
         git commit -m "Update API image tag to ${{ inputs.image_tag }}" || echo "Nothing to commit"
 
-    - name: Push changes
+    - name: Push changes using PAT
       run: |
-        git push || echo "No changes to push"
+        git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/bqmxnh/cloud-ops.git HEAD:main
