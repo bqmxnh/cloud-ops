@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ids-api
+  labels:
+    app: ids-api
+spec:
+  replicas: {{ if not .Values.autoscaling.enabled }}{{ .Values.replicaCount }}{{ end }}
+  selector:
+    matchLabels:
+      app: ids-api
+  template:
+    metadata:
+      labels:
+        app: ids-api
+    spec:
+      containers:
+      - name: ids-api
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.containerPort }}
+
+        env:
+        - name: MODEL_BUCKET
+          value: "{{ .Values.env.MODEL_BUCKET }}"
+        - name: MODEL_VERSION
+          value: "{{ .Values.env.MODEL_VERSION }}"
+
+        readinessProbe:
+          httpGet:
+            path: /
+            port: {{ .Values.service.targetPort }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+        livenessProbe:
+          httpGet:
+            path: /
+            port: {{ .Values.service.targetPort }}
+          initialDelaySeconds: 10
+          periodSeconds: 20
+
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}

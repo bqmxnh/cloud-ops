@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow-server
+  labels:
+    app: mlflow-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow-server
+  template:
+    metadata:
+      labels:
+        app: mlflow-server
+    spec:
+      containers:
+      - name: mlflow
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.service.targetPort }}
+
+        env:
+        - name: BACKEND_STORE_URI
+          value: "{{ .Values.env.BACKEND_STORE_URI }}"
+        - name: ARTIFACT_ROOT
+          value: "{{ .Values.env.ARTIFACT_ROOT }}"
+        - name: AWS_DEFAULT_REGION
+          value: "{{ .Values.env.AWS_DEFAULT_REGION }}"
+        - name: MLFLOW_S3_IGNORE_TLS
+          value: "{{ .Values.env.MLFLOW_S3_IGNORE_TLS }}"
+
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            mlflow server \
+            --backend-store-uri=$(BACKEND_STORE_URI) \
+            --default-artifact-root=$(ARTIFACT_ROOT) \
+            --host=0.0.0.0 \
+            --port={{ .Values.service.targetPort }} \
+            --gunicorn-opts="--timeout 180" \
+            --cors-allowed-origins='*'
+
+        volumeMounts:
+        - name: mlflow-storage
+          mountPath: /mlflow
+
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+
+      volumes:
+      - name: mlflow-storage
+        emptyDir: {}

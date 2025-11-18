@@ -1,0 +1,26 @@
+global:
+  image:
+    registry: docker.io/bqmxnh
+    pullPolicy: Always
+
+api:
+  image:
+    repository: bqmxnh/arf-ids-api
+    tag: "latest"
+    pullPolicy: Always
+
+  replicaCount: 2
+
+  service:
+    port: 80
+    targetPort: 8000
+
+  env:
+    MODEL_BUCKET: "arf-ids-model-bucket"
+    MODEL_VERSION: "v1.0"
+
+  ingress:
+    enabled: true
+    className: alb
+    host: api.qmuit.id.vn
+    path: /

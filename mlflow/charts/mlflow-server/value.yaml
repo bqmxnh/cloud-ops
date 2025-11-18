@@ -1,0 +1,27 @@
+image:
+  repository: ghcr.io/mlflow/mlflow
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+  targetPort: 5000
+
+ingress:
+  enabled: true
+  host: "mlflow.qmuit.id.vn"
+  path: "/"
+
+env:
+  BACKEND_STORE_URI: "sqlite:///mlflow.db"
+  ARTIFACT_ROOT: "s3://arf-ids-model-bucket/mlflow-artifacts"
+  AWS_DEFAULT_REGION: "us-east-1"
+  MLFLOW_S3_IGNORE_TLS: "true"
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "1Gi"

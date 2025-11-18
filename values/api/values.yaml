@@ -1,0 +1,22 @@
+image:
+  repository: bqmxnh/arf-ids-api
+  tag: latest
+  pullPolicy: Always
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 80
+
+containerPort: 8000
+
+model:
+  bucket: arf-ids-model-bucket
+  version: "v1.0"
+
+ingress:
+  enabled: true
+  className: alb
+  host: api.qmuit.id.vn
+  path: /

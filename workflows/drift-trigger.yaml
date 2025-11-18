@@ -1,0 +1,16 @@
+# Drift trigger disabled
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: drift-trigger-disabled
+spec:
+  dependencies:
+  - name: noop
+    eventSourceName: disabled
+    eventName: unused
+  triggers:
+  - template:
+      name: noop-trigger
+      http:
+        url: http://example.com
+        method: POST

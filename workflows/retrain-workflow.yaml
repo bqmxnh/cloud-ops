@@ -1,0 +1,13 @@
+# Retrain workflow disabled
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: retrain-workflow-disabled
+spec:
+  entrypoint: noop
+  templates:
+  - name: noop
+    container:
+      image: alpine
+      command: ["sh", "-c"]
+      args: ["echo 'Retrain workflow is disabled'"]
