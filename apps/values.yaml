@@ -1,58 +1,8 @@
-global:
-  image:
-    registry: docker.io/bqmxnh
-    pullPolicy: Always
+repoURL: https://github.com/bqmxnh/cloud-ops.git
+targetRevision: main
 
 api:
-  image:
-    repository: bqmxnh/arf-ids-api
-    tag: "latest"
-    pullPolicy: Always
-
-  replicaCount: 2
-
-  service:
-    port: 80
-    targetPort: 8000
-
-  env:
-    MODEL_BUCKET: "arf-ids-model-bucket"
-    MODEL_VERSION: "v1.0"
-
-  ingress:
-    enabled: true
-    className: alb
-    host: api.qmuit.id.vn
-    path: /
+  path: values/api
 
 mlflow:
-  image:
-    repository: ghcr.io/mlflow/mlflow
-    tag: latest
-    pullPolicy: IfNotPresent
-
-  replicaCount: 1
-
-  service:
-    port: 80
-    targetPort: 5000
-
-  ingress:
-    enabled: true
-    className: alb
-    host: mlflow.qmuit.id.vn
-    path: "/"
-
-  env:
-    BACKEND_STORE_URI: "sqlite:///mlflow.db"
-    ARTIFACT_ROOT: "s3://arf-ids-model-bucket/mlflow-artifacts"
-    AWS_DEFAULT_REGION: "us-east-1"
-    MLFLOW_S3_IGNORE_TLS: "true"
-
-  resources:
-    requests:
-      cpu: "250m"
-      memory: "512Mi"
-    limits:
-      cpu: "500m"
-      memory: "1Gi"
+  path: values/mlflow
