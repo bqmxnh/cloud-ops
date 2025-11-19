@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: ids-api
+  name: api-service
   labels:
-    app: ids-api
+    app: api-service
 spec:
   type: ClusterIP
   selector:
-    app: ids-api
+    app: api-service
   ports:
   - port: {{ .Values.service.port }}
     targetPort: {{ .Values.service.targetPort }}

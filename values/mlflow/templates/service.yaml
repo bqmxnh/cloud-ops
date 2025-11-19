@@ -3,11 +3,11 @@ kind: Service
 metadata:
   name: mlflow-service
   labels:
-    app: mlflow-server
+    app: mlflow-service
 spec:
   type: ClusterIP
   selector:
-    app: mlflow-server
+    app: mlflow-service
   ports:
     - port: {{ .Values.service.port }}
       targetPort: {{ .Values.service.targetPort }}
