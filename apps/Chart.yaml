@@ -1,6 +1,6 @@
 apiVersion: v2
 name: ids-chart
-description: Root Helm chart deploying IDS API + MLflow (subcharts)
+description: Root Helm chart deploying IDS API + MLflow
 type: application
 version: 1.0.0
 appVersion: "1.0"
@@ -10,4 +10,6 @@ dependencies:
     version: 0.1.0
     repository: "file://../values/api"
 
-
+  - name: mlflow
+    version: 0.1.0
+    repository: "file://../values/mlflow"
