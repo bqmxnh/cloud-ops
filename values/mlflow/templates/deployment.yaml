@@ -34,16 +34,13 @@ spec:
 
           command: ["mlflow"]
           args:
-            - server
+            - ui
             - --backend-store-uri=$(BACKEND_STORE_URI)
             - --default-artifact-root=$(ARTIFACT_ROOT)
             - --host=0.0.0.0
             - --port={{ .Values.service.targetPort }}
-            - --workers=1
-            - --no-manager
-            - --uvicorn-opts=--proxy-headers --forwarded-allow-ips="*"
-            - --cors-allowed-origins=*
             - --allowed-hosts=*
+            - --cors-allowed-origins=*
 
 
           volumeMounts:
