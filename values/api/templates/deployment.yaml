@@ -5,10 +5,13 @@ metadata:
   labels:
     app: ids-api
 spec:
-  replicas: {{ if not (and .Values.autoscaling (hasKey .Values.autoscaling "enabled") .Values.autoscaling.enabled) }}{{ .Values.replicaCount }}{{ end }}
+  # Nếu autoscaling.enabled = true → bỏ replicas
+  replicas: {{ if not (.Values.autoscaling.enabled | default false) }}{{ .Values.replicaCount }}{{ end }}
+
   selector:
     matchLabels:
       app: ids-api
+
   template:
     metadata:
       labels:
@@ -18,14 +21,15 @@ spec:
       - name: ids-api
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+
         ports:
         - containerPort: {{ .Values.containerPort }}
 
         env:
         - name: MODEL_BUCKET
-          value: "{{ .Values.env.MODEL_BUCKET }}"
+          value: "{{ .Values.model.bucket }}"
         - name: MODEL_VERSION
-          value: "{{ .Values.env.MODEL_VERSION }}"
+          value: "{{ .Values.model.version }}"
 
         readinessProbe:
           httpGet:
@@ -42,4 +46,4 @@ spec:
           periodSeconds: 20
 
         resources:
-          {{- toYaml .Values.resources | nindent 10 }}
+{{- toYaml .Values.resources | nindent 10 }}
