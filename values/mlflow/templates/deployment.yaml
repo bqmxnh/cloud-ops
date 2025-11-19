@@ -14,6 +14,16 @@ spec:
       labels:
         app: mlflow-service
     spec:
+
+    
+      initContainers:
+        - name: init-mlflow-dir
+          image: busybox
+          command: ["sh", "-c", "mkdir -p /mlflow && chmod -R 777 /mlflow"]
+          volumeMounts:
+            - name: mlflow-storage
+              mountPath: /mlflow
+
       containers:
         - name: mlflow
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -31,8 +41,6 @@ spec:
               value: "{{ .Values.env.AWS_DEFAULT_REGION }}"
             - name: MLFLOW_S3_IGNORE_TLS
               value: "{{ .Values.env.MLFLOW_S3_IGNORE_TLS }}"
-
-            # Cho phép ALB + domain public truy cập
             - name: MLFLOW_ALLOW_EVERYONE
               value: "true"
 
