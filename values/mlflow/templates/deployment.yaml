@@ -32,15 +32,15 @@ spec:
             - name: MLFLOW_S3_IGNORE_TLS
               value: "{{ .Values.env.MLFLOW_S3_IGNORE_TLS }}"
 
-          command: ["/bin/sh", "-c"]
+          command: ["mlflow"]
           args:
-            - |
-              mlflow server \
-              --backend-store-uri=$(BACKEND_STORE_URI) \
-              --default-artifact-root=$(ARTIFACT_ROOT) \
-              --host=0.0.0.0 \
-              --port={{ .Values.service.targetPort }} \
-              --gunicorn-opts="--timeout 300"
+            - server
+            - --backend-store-uri=$(BACKEND_STORE_URI)
+            - --default-artifact-root=$(ARTIFACT_ROOT)
+            - --host=0.0.0.0
+            - --port={{ .Values.service.targetPort }}
+            - --workers=1
+            - --cors-allowed-origins=*
 
           volumeMounts:
             - name: mlflow-storage
