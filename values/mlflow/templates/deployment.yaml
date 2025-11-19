@@ -31,6 +31,8 @@ spec:
               value: "{{ .Values.env.AWS_DEFAULT_REGION }}"
             - name: MLFLOW_S3_IGNORE_TLS
               value: "{{ .Values.env.MLFLOW_S3_IGNORE_TLS }}"
+            - name: MLFLOW_ALLOWED_HOSTS
+              value: "*"
 
           command: ["mlflow"]
           args:
@@ -41,7 +43,6 @@ spec:
             - --port={{ .Values.service.targetPort }}
             - --workers=1
             - --cors-allowed-origins=*
-            - --allowed-hosts=*
             - --gunicorn-opts=--timeout 300
 
           volumeMounts:
