@@ -1,8 +1,7 @@
 image:
-  repository: mlflow/mlflow
-  tag: "2.14.1"
+  repository: ghcr.io/mlflow/mlflow
+  tag: latest
   pullPolicy: IfNotPresent
-
 
 service:
   port: 80          # Service port
