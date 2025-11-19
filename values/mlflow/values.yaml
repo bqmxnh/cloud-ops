@@ -14,7 +14,7 @@ ingress:
   path: "/"
 
 env:
-  BACKEND_STORE_URI: "sqlite:///mlflow.db"
+  BACKEND_STORE_URI: "sqlite:////mlflow/mlflow.db"
   ARTIFACT_ROOT: "s3://arf-ids-model-bucket/mlflow-artifacts"
   AWS_DEFAULT_REGION: "us-east-1"
   MLFLOW_S3_IGNORE_TLS: "true"
