@@ -41,6 +41,8 @@ spec:
             - --port={{ .Values.service.targetPort }}
             - --workers=1
             - --cors-allowed-origins=*
+            - --allowed-hosts=*
+            - --gunicorn-opts=--timeout 300
 
           volumeMounts:
             - name: mlflow-storage
