@@ -8,6 +8,7 @@ replicaCount: 2
 service:
   type: ClusterIP
   port: 80
+  targetPort: 8000
 
 containerPort: 8000
 
