@@ -32,18 +32,9 @@ spec:
             - name: MLFLOW_S3_IGNORE_TLS
               value: "{{ .Values.env.MLFLOW_S3_IGNORE_TLS }}"
 
-          command: ["mlflow"]
-          args:
-            - server
-            - --backend-store-uri=$(BACKEND_STORE_URI)
-            - --default-artifact-root=$(ARTIFACT_ROOT)
-            - --host=0.0.0.0
-            - --port={{ .Values.service.targetPort }}
-            - --workers=1
-            - --allowed-hosts=*
-            - --cors-allowed-origins=*
-
-
+            # Cho phép ALB + domain public truy cập
+            - name: MLFLOW_ALLOW_EVERYONE
+              value: "true"
 
           volumeMounts:
             - name: mlflow-storage
