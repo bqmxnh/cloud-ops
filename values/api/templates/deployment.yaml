@@ -1,21 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ids-api
+  name: api-server
   labels:
-    app: ids-api
+    app: api-service
 spec:
-  # Nếu autoscaling.enabled = true → bỏ replicas
   replicas: {{ if not (.Values.autoscaling.enabled | default false) }}{{ .Values.replicaCount }}{{ end }}
-
   selector:
     matchLabels:
-      app: ids-api
-
+      app: api-service
   template:
     metadata:
       labels:
-        app: ids-api
+        app: api-service
     spec:
       containers:
       - name: ids-api
