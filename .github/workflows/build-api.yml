@@ -36,6 +36,7 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: "Update Helm Chart"
+          repo: bqmxnh/manifests-cloud-ops
           ref: "main"
           token: ${{ secrets.PAT_TOKEN }}
           inputs: |

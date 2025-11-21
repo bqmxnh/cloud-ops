@@ -1,8 +1,0 @@
-repoURL: https://github.com/bqmxnh/cloud-ops.git
-targetRevision: main
-
-api:
-  path: values/api
-
-mlflow:
-  path: values/mlflow
