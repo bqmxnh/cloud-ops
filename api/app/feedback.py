@@ -19,20 +19,22 @@ def feedback(data: FeedbackSchema):
     print("True raw:", true_raw)
     print("prediction_history id:", id(G.prediction_history))
 
-    classes = list(G.encoder.classes_)
-    lookup = {c.lower(): c for c in classes}
+    # ----- MANUAL LABEL MAP (bỏ encoder mapping bị sai) -----
+    manual_map = {"benign": 0, "attack": 1}
 
-    if true_raw.lower() not in lookup:
-        return {"error": f"Label not in encoder: {true_raw}"}
+    if true_raw.lower() not in manual_map:
+        return {"error": f"Invalid true_label: {true_raw}"}
 
-    normalized_label = lookup[true_raw.lower()]
-    y_true = int(G.encoder.transform([normalized_label])[0])
+    y_true = manual_map[true_raw.lower()]
+    normalized_label = true_raw.upper()
+    # -----------------------------------------------------------
 
     if flow_id not in G.prediction_history:
         return {"error": f"No prediction for Flow ID {flow_id}"}
 
     pred_str, pred_id = G.prediction_history[flow_id]
 
+    # ===== DRIFT BEFORE LEARNING =====
     is_error = int(pred_id != y_true)
     G.adwin.update(is_error)
     drift_detected = G.adwin.drift_detected
@@ -41,6 +43,7 @@ def feedback(data: FeedbackSchema):
     x = G.scaler.transform_one(features)
 
     with G.model_lock:
+        # BEFORE
         proba_before = G.model.predict_proba_one(x)
         pred_before = max(proba_before, key=proba_before.get)
         conf_before = float(proba_before[pred_before])
@@ -50,13 +53,18 @@ def feedback(data: FeedbackSchema):
             G.model.learn_one(x, y_true)
             LEARN_COUNT.inc()
 
+        # AFTER
         proba_after = G.model.predict_proba_one(x)
         pred_after = max(proba_after, key=proba_after.get)
         conf_after = float(proba_after[pred_after])
 
-    decoded_before = G.encoder.inverse_transform([int(pred_before)])[0]
-    decoded_after = G.encoder.inverse_transform([int(pred_after)])[0]
+    # ---- MANUAL INVERSE MAP ----
+    inv_map = {0: "BENIGN", 1: "ATTACK"}
+    decoded_before = inv_map.get(int(pred_before), "UNKNOWN")
+    decoded_after  = inv_map.get(int(pred_after), "UNKNOWN")
+    # ------------------------------
 
+    # ===== METRICS =====
     G.metric_acc.update(y_true, pred_id)
     G.metric_prec.update(y_true, pred_id)
     G.metric_rec.update(y_true, pred_id)
