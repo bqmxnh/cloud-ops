@@ -3,7 +3,6 @@ import time
 from app.schemas import FlowSchema, PredictionResponse
 from app.model_loader import model, scaler, encoder, model_lock, prediction_history
 from app.metrics import PREDICTION_COUNT, LATENCY
-from app.utils.preprocess import sanitize
 
 router = APIRouter()
 
@@ -12,31 +11,36 @@ router = APIRouter()
 def predict(flow: FlowSchema):
     start = time.time()
 
-    try:
-        features = sanitize(flow.features)
-        x = scaler.transform_one(features)
+    # === 1) Giống bản cũ: Flow ID bắt buộc ===
+    if flow.flow_id is None:
+        return {"error": "Flow ID is required"}
 
-        flow_id = flow.flow_id or "unknown"
+    flow_id = flow.flow_id  # không fallback, bắt buộc đúng
+
+    try:
+        # === 2) Giống bản cũ: không sanitize ===
+        x = scaler.transform_one(flow.features)
 
         with model_lock:
             proba = model.predict_proba_one(x)
 
             if proba:
-                pred = max(proba, key=proba.get)   # ALWAYS int for River
+                pred = max(proba, key=proba.get)
                 conf = float(proba[pred])
             else:
-                pred = model.predict_one(x)       # ALWAYS int for River
+                pred = model.predict_one(x)
                 conf = 1.0
 
-            # decode label
+            # decode giống bản cũ
             try:
-                decoded = encoder.inverse_transform([pred])[0]
+                decoded = encoder.inverse_transform([int(pred)])[0]
             except:
-                decoded = str(pred)
+                decoded = pred
 
-        # FIX: Do NOT cast pred → keep it original integer
-        prediction_history[flow_id] = (decoded, pred)
+        # === 3) Giống bản cũ: lưu (decoded_string, int_pred) ===
+        prediction_history[flow_id] = (decoded, int(pred))
 
+        # === 4) Metrics ===
         latency = (time.time() - start) * 1000
         LATENCY.observe(latency)
         PREDICTION_COUNT.inc()
