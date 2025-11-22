@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.model_loader import init_model
 from app.inference import router as inference_router
 from app.feedback import router as feedback_router
 from app.metrics import metrics_router
@@ -8,6 +9,13 @@ app = FastAPI(
     version="6.0-incremental-learning",
     description="Adaptive Random Forest with Incremental Learning and ADWIN"
 )
+
+@app.on_event("startup")
+def startup_event():
+    print("[INIT] Loading model into globals...")
+    init_model()
+    print("[INIT] Model loaded successfully!")
+
 
 @app.get("/")
 def root():
