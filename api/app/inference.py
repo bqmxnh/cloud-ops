@@ -32,11 +32,8 @@ def predict(flow: FlowSchema):
                 pred = G.model.predict_one(x)
                 conf = 1.0
 
-        # ---- MANUAL INVERSE MAP (đúng chuẩn BENIGN=0, ATTACK=1) ----
-        inv_map = {0: "BENIGN", 1: "ATTACK"}
-        decoded = inv_map.get(int(pred), "UNKNOWN")
+            decoded = G.encoder.inverse_transform([int(pred)])[0]
 
-        # save history
         G.prediction_history[flow_id] = (decoded, int(pred))
 
         print(f"Saved prediction_history[{flow_id}] = ({decoded}, {int(pred)})")
