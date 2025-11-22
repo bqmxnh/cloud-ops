@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 import time
 from app.schemas import FlowSchema, PredictionResponse
-from app.model_loader import model, scaler, encoder, model_lock
+from app.model_loader import model, scaler, encoder, model_lock, prediction_history
 from app.metrics import PREDICTION_COUNT, LATENCY
 from app.utils.preprocess import sanitize
 
 router = APIRouter()
+
 
 @router.post("", response_model=PredictionResponse)
 def predict(flow: FlowSchema):
@@ -14,6 +15,8 @@ def predict(flow: FlowSchema):
     try:
         features = sanitize(flow.features)
         x = scaler.transform_one(features)
+
+        flow_id = flow.flow_id or "unknown"
 
         with model_lock:
             proba = model.predict_proba_one(x)
@@ -25,17 +28,21 @@ def predict(flow: FlowSchema):
                 pred = model.predict_one(x)
                 conf = 1.0
 
+            # decode label
             try:
                 decoded = encoder.inverse_transform([int(pred)])[0]
             except:
                 decoded = pred
+
+        # NEW: save prediction to history for feedback matching
+        prediction_history[flow_id] = (decoded, int(pred))
 
         latency = (time.time() - start) * 1000
         LATENCY.observe(latency)
         PREDICTION_COUNT.inc()
 
         return PredictionResponse(
-            flow_id=flow.flow_id or "unknown",
+            flow_id=flow_id,
             prediction=str(decoded),
             confidence=round(conf, 4),
             latency_ms=round(latency, 3)
@@ -43,5 +50,3 @@ def predict(flow: FlowSchema):
 
     except Exception as e:
         return {"error": str(e)}
-    
-#

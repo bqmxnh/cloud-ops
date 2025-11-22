@@ -5,8 +5,8 @@ from app.metrics import metrics_router
 
 app = FastAPI(
     title="ARF IDS API",
-    version="5.0-incremental-learning",
-    description="Adaptive Random Forest IDS API with incremental learning"
+    version="6.0-incremental-learning",
+    description="Adaptive Random Forest with Incremental Learning and ADWIN"
 )
 
 @app.get("/")
@@ -15,7 +15,7 @@ def root():
         "status": "running",
         "service": "IDS Cloud Ops API",
         "model": "Adaptive Random Forest",
-        "version": "5.0"
+        "version": "6.0"
     }
 
 # Routers
