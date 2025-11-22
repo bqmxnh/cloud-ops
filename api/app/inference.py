@@ -22,20 +22,20 @@ def predict(flow: FlowSchema):
             proba = model.predict_proba_one(x)
 
             if proba:
-                pred = max(proba, key=proba.get)
+                pred = max(proba, key=proba.get)   # ALWAYS int for River
                 conf = float(proba[pred])
             else:
-                pred = model.predict_one(x)
+                pred = model.predict_one(x)       # ALWAYS int for River
                 conf = 1.0
 
             # decode label
             try:
-                decoded = encoder.inverse_transform([int(pred)])[0]
+                decoded = encoder.inverse_transform([pred])[0]
             except:
-                decoded = pred
+                decoded = str(pred)
 
-        # NEW: save prediction to history for feedback matching
-        prediction_history[flow_id] = (decoded, int(pred))
+        # FIX: Do NOT cast pred → keep it original integer
+        prediction_history[flow_id] = (decoded, pred)
 
         latency = (time.time() - start) * 1000
         LATENCY.observe(latency)
