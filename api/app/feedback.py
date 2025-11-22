@@ -110,13 +110,14 @@ def feedback(data: FeedbackSchema):
     print("====================== END FEEDBACK ======================\n")
 
     return {
-        "status": "ok",
-        "flow_id": data.flow_id,
-        "true_label": normalized_label,
-        "pred_before": G.encoder.inverse_transform([int(pred_before)])[0],
-        "conf_before": round(conf_before, 4),
-        "pred_after": G.encoder.inverse_transform([int(pred_after)])[0],
-        "conf_after": round(conf_after, 4),
-        "need_learning": need_learning,
-        "drift_detected": drift_detected
+    "status": "ok",
+    "flow_id": str(data.flow_id),
+    "true_label": str(normalized_label),
+    "pred_before": str(G.encoder.inverse_transform([int(pred_before)])[0]),
+    "conf_before": float(round(conf_before, 4)),
+    "pred_after": str(G.encoder.inverse_transform([int(pred_after)])[0]),
+    "conf_after": float(round(conf_after, 4)),
+    "need_learning": bool(need_learning),
+    "drift_detected": bool(drift_detected)
     }
+
