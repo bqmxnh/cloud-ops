@@ -43,12 +43,14 @@ def load_production_model():
 
     pyf_model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}/Production")
 
-    # Load artifacts
-    model         = cloudpickle.load(open(pyf_model._context.artifacts["model"], "rb"))
-    scaler        = cloudpickle.load(open(pyf_model._context.artifacts["scaler"], "rb"))
-    encoder       = cloudpickle.load(open(pyf_model._context.artifacts["encoder"], "rb"))
-    feature_order = cloudpickle.load(open(pyf_model._context.artifacts["feature_order"], "rb"))
-    replay        = cloudpickle.load(open(pyf_model._context.artifacts["replay"], "rb"))
+    artifact_dir = pyf_model._context.artifacts["artifacts"]
+
+    model         = cloudpickle.load(open(f"{artifact_dir}/model.pkl", "rb"))
+    scaler        = cloudpickle.load(open(f"{artifact_dir}/scaler.pkl", "rb"))
+    encoder       = cloudpickle.load(open(f"{artifact_dir}/label_encoder.pkl", "rb"))
+    feature_order = cloudpickle.load(open(f"{artifact_dir}/feature_order.pkl", "rb"))
+    replay        = cloudpickle.load(open(f"{artifact_dir}/replay.pkl", "rb"))
+
 
     return model, scaler, encoder, feature_order, replay, prod.version
 
