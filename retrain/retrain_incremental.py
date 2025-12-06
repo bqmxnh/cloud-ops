@@ -18,7 +18,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")   # phải trùng tê
 S3_BUCKET = os.getenv("S3_BUCKET", "qmuit-ids-training-data-store")
 
 mlflow.set_tracking_uri(MLFLOW_URL)
-mlflow.set_experiment("ARF Incremental Retrain (Drift+Base)")
+mlflow.set_experiment("ARF Baseline Training")
 
 s3 = boto3.client("s3")
 
