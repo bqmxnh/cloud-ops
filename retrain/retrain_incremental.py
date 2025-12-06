@@ -15,7 +15,7 @@ from river import preprocessing, metrics, forest, drift
 # ============================================================
 MLFLOW_URL = os.getenv("MLFLOW_TRACKING_URI", "https://mlflow.qmuit.id.vn")
 MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")
-S3_BUCKET  = os.getenv("S3_BUCKET", "qmuit-ids-training-data-store")
+S3_BUCKET  = os.getenv("S3_BUCKET", "qmuit-training-data-store")
 
 mlflow.set_tracking_uri(MLFLOW_URL)
 mlflow.set_experiment("ARF Incremental Retrain")
