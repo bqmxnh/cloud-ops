@@ -22,9 +22,19 @@ jobs:
 
       - name: Build retrain image (SHA + latest)
         run: |
-          docker build -t bqmxnh/cloud-ops-retrain:${{ github.sha }} -t bqmxnh/cloud-ops-retrain:latest retrain
+          docker build -t bqmxnh/cloud-ops-retrain:${{ github.sha }} \
+                       -t bqmxnh/cloud-ops-retrain:latest retrain
 
       - name: Push images
         run: |
           docker push bqmxnh/cloud-ops-retrain:${{ github.sha }}
           docker push bqmxnh/cloud-ops-retrain:latest
+
+      - name: Update retrain tag in values
+        run: |
+          sed -i "s/tag:.*/tag: \"${{ github.sha }}\"/" values/argo-workflows/retrain.yaml
+
+      - name: Commit updated tag
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Update retrain image tag to ${{ github.sha }}"
