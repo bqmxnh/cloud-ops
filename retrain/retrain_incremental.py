@@ -47,11 +47,27 @@ def load_production_model():
 
     artifacts = pyf_model._context.artifacts
 
-    model         = cloudpickle.load(open(artifacts["model"], "rb"))
-    scaler        = cloudpickle.load(open(artifacts["scaler"], "rb"))
-    encoder       = cloudpickle.load(open(artifacts["encoder"], "rb"))
-    feature_order = cloudpickle.load(open(artifacts["feature_order"], "rb"))
-    replay        = cloudpickle.load(open(artifacts["replay"], "rb"))
+    # ✅ FIX: Thêm os.path.join để xử lý path đúng
+    model_path = os.path.join(artifacts["model"], "model.pkl")
+    scaler_path = os.path.join(artifacts["scaler"], "scaler.pkl")
+    encoder_path = os.path.join(artifacts["encoder"], "encoder.pkl")
+    feature_order_path = os.path.join(artifacts["feature_order"], "feature_order.pkl")
+    replay_path = os.path.join(artifacts["replay"], "replay.pkl")
+
+    with open(model_path, "rb") as f:
+        model = cloudpickle.load(f)
+    
+    with open(scaler_path, "rb") as f:
+        scaler = cloudpickle.load(f)
+    
+    with open(encoder_path, "rb") as f:
+        encoder = cloudpickle.load(f)
+    
+    with open(feature_order_path, "rb") as f:
+        feature_order = cloudpickle.load(f)
+    
+    with open(replay_path, "rb") as f:
+        replay = cloudpickle.load(f)
 
     return model, scaler, encoder, feature_order, replay, prod.version
 
@@ -106,13 +122,32 @@ def record_stream(df, feature_order):
 # ============================================================
 class ARFIncrementalPredictor(pyfunc.PythonModel):
     def load_context(self, context):
+        import os
+        import cloudpickle
+        
         artifacts = context.artifacts
 
-        self.model         = cloudpickle.load(open(artifacts["model"], "rb"))
-        self.scaler        = cloudpickle.load(open(artifacts["scaler"], "rb"))
-        self.encoder       = cloudpickle.load(open(artifacts["encoder"], "rb"))
-        self.feature_order = cloudpickle.load(open(artifacts["feature_order"], "rb"))
-        self.replay        = cloudpickle.load(open(artifacts["replay"], "rb"))
+        # ✅ FIX: Thêm os.path.join để xử lý path đúng
+        model_path = os.path.join(artifacts["model"], "model.pkl")
+        scaler_path = os.path.join(artifacts["scaler"], "scaler.pkl")
+        encoder_path = os.path.join(artifacts["encoder"], "encoder.pkl")
+        feature_order_path = os.path.join(artifacts["feature_order"], "feature_order.pkl")
+        replay_path = os.path.join(artifacts["replay"], "replay.pkl")
+
+        with open(model_path, "rb") as f:
+            self.model = cloudpickle.load(f)
+        
+        with open(scaler_path, "rb") as f:
+            self.scaler = cloudpickle.load(f)
+        
+        with open(encoder_path, "rb") as f:
+            self.encoder = cloudpickle.load(f)
+        
+        with open(feature_order_path, "rb") as f:
+            self.feature_order = cloudpickle.load(f)
+        
+        with open(replay_path, "rb") as f:
+            self.replay = cloudpickle.load(f)
 
     def predict(self, context, df):
         preds = []
@@ -151,6 +186,7 @@ def main():
     print(f"Incremental Accuracy: {acc.get():.4f}")
     print(f"Duration: {time.time() - t0:.2f}s")
 
+    # Save artifacts locally
     cloudpickle.dump(model, open("model.pkl", "wb"))
     cloudpickle.dump(scaler, open("scaler.pkl", "wb"))
     cloudpickle.dump(encoder, open("encoder.pkl", "wb"))
@@ -160,6 +196,8 @@ def main():
     with mlflow.start_run(run_name="incremental_retrain"):
 
         mlflow.log_metric("incremental_acc", acc.get())
+        mlflow.log_metric("training_duration_sec", time.time() - t0)
+        mlflow.log_metric("training_samples", len(df))
 
         mlflow.pyfunc.log_model(
             artifact_path="arf_model",
@@ -175,16 +213,26 @@ def main():
         )
 
         client = MlflowClient()
-        new_version = client.get_latest_versions(MODEL_NAME, stages=["None"])[-1].version
+        new_versions = client.get_latest_versions(MODEL_NAME, stages=["None"])
+        
+        if new_versions:
+            new_version = new_versions[-1].version
 
-        client.transition_model_version_stage(
-            name=MODEL_NAME,
-            version=new_version,
-            stage="Staging",
-            archive_existing_versions=False,
-        )
+            client.transition_model_version_stage(
+                name=MODEL_NAME,
+                version=new_version,
+                stage="Staging",
+                archive_existing_versions=False,
+            )
 
-        print(f"New version {new_version} promoted → STAGING")
+            print(f"✅ New version {new_version} promoted → STAGING")
+        else:
+            print("❌ No new version found to promote")
+
+    # Cleanup local files
+    for f in ["model.pkl", "scaler.pkl", "encoder.pkl", "feature_order.pkl", "replay.pkl"]:
+        if os.path.exists(f):
+            os.remove(f)
 
 
 if __name__ == "__main__":
