@@ -50,7 +50,7 @@ def load_production_model():
 
     model         = joblib.load(os.path.join(local, "model.pkl"))
     scaler        = joblib.load(os.path.join(local, "scaler.pkl"))
-    encoder       = joblib.load(os.path.join(local, "encoder.pkl"))
+    encoder       = joblib.load(os.path.join(local, "label_encoder.pkl"))
     feature_order = joblib.load(os.path.join(local, "feature_order.pkl"))
     replay        = joblib.load(os.path.join(local, "replay.pkl"))
 
