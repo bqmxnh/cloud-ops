@@ -51,8 +51,8 @@ def load_production_model():
     feature_order = cloudpickle.load(open(f"{artifact_dir}/feature_order.pkl", "rb"))
     replay        = cloudpickle.load(open(f"{artifact_dir}/replay.pkl", "rb"))
 
-
     return model, scaler, encoder, feature_order, replay, prod.version
+
 
 
 # ============================================================
@@ -107,11 +107,16 @@ def record_stream(df, feature_order):
 # ============================================================
 class ARFPredictor(pyfunc.PythonModel):
     def load_context(self, context):
-        self.model         = cloudpickle.load(open(context.artifacts["model"], "rb"))
-        self.scaler        = cloudpickle.load(open(context.artifacts["scaler"], "rb"))
-        self.encoder       = cloudpickle.load(open(context.artifacts["encoder"], "rb"))
-        self.feature_order = cloudpickle.load(open(context.artifacts["feature_order"], "rb"))
-        self.replay        = cloudpickle.load(open(context.artifacts["replay"], "rb"))
+
+        artifact_dir = context.artifacts["artifacts"]
+
+        self.model         = cloudpickle.load(open(f"{artifact_dir}/model.pkl", "rb"))
+        self.scaler        = cloudpickle.load(open(f"{artifact_dir}/scaler.pkl", "rb"))
+        self.encoder       = cloudpickle.load(open(f"{artifact_dir}/label_encoder.pkl", "rb"))
+        self.feature_order = cloudpickle.load(open(f"{artifact_dir}/feature_order.pkl", "rb"))
+        self.replay        = cloudpickle.load(open(f"{artifact_dir}/replay.pkl", "rb"))
+
+
 
     def predict(self, context, df):
         preds = []
