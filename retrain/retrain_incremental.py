@@ -78,6 +78,7 @@ def merge_datasets(df_drift, df_base, ratio=0.3):
         random_state=42
     )
 
+
     merged = (
         pd.concat([df_drift, df_base_sample])
         .sample(frac=1.0, random_state=42)
