@@ -21,12 +21,11 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build image
       - name: Build retrain image
         run: |
-          docker build -t bqmxnh/cloud-ops-retrain:latest retrain
+            docker build -t bqmxnh/cloud-ops-retrain:${{ github.sha }} retrain
 
-      # Push image
       - name: Push retrain image
         run: |
-          docker push bqmxnh/cloud-ops-retrain:latest
+            docker push bqmxnh/cloud-ops-retrain:${{ github.sha }}
+
