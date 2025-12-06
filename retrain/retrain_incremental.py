@@ -1,3 +1,4 @@
+# retrain_incremental.py
 import pandas as pd
 import boto3
 import io
@@ -8,13 +9,14 @@ from mlflow.tracking import MlflowClient
 import time
 import os
 
-from river import preprocessing, metrics, forest
+from river import preprocessing, metrics
+
 
 # ============================================================
 # CONFIG
 # ============================================================
 MLFLOW_URL = os.getenv("MLFLOW_TRACKING_URI", "https://mlflow.qmuit.id.vn")
-MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")   # phải trùng tên khi bạn upload baseline
+MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")
 S3_BUCKET = os.getenv("S3_BUCKET", "qmuit-ids-training-data-store")
 
 mlflow.set_tracking_uri(MLFLOW_URL)
@@ -24,7 +26,7 @@ s3 = boto3.client("s3")
 
 
 # ============================================================
-# Load CSV from S3
+# LOAD CSV FROM S3
 # ============================================================
 def load_s3_csv(key: str):
     print(f"Loading s3://{S3_BUCKET}/{key}")
@@ -33,7 +35,7 @@ def load_s3_csv(key: str):
 
 
 # ============================================================
-# Load Production Model
+# LOAD PRODUCTION MODEL
 # ============================================================
 def load_production_model():
     client = MlflowClient()
@@ -43,20 +45,19 @@ def load_production_model():
 
     pyf_model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}/Production")
 
-    artifact_dir = pyf_model._context.artifacts["artifacts"]
+    artifacts = pyf_model._context.artifacts
 
-    model         = cloudpickle.load(open(f"{artifact_dir}/model.pkl", "rb"))
-    scaler        = cloudpickle.load(open(f"{artifact_dir}/scaler.pkl", "rb"))
-    encoder       = cloudpickle.load(open(f"{artifact_dir}/label_encoder.pkl", "rb"))
-    feature_order = cloudpickle.load(open(f"{artifact_dir}/feature_order.pkl", "rb"))
-    replay        = cloudpickle.load(open(f"{artifact_dir}/replay.pkl", "rb"))
+    model         = cloudpickle.load(open(artifacts["model"], "rb"))
+    scaler        = cloudpickle.load(open(artifacts["scaler"], "rb"))
+    encoder       = cloudpickle.load(open(artifacts["encoder"], "rb"))
+    feature_order = cloudpickle.load(open(artifacts["feature_order"], "rb"))
+    replay        = cloudpickle.load(open(artifacts["replay"], "rb"))
 
     return model, scaler, encoder, feature_order, replay, prod.version
 
 
-
 # ============================================================
-# Load training data
+# LOAD DATA
 # ============================================================
 def load_datasets():
     df_drift = load_s3_csv("drift/drift.csv")
@@ -69,17 +70,15 @@ def load_datasets():
 
 
 # ============================================================
-# Merge Drift + Base = 70/30
+# MERGE 70/30
 # ============================================================
 def merge_datasets(df_drift, df_base, ratio=0.3):
     n_drift = len(df_drift)
     n_base = int(n_drift * ratio / (1 - ratio))
 
     df_base_sample = df_base.sample(
-        n=min(n_base, len(df_base)),
-        random_state=42
+        n=min(n_base, len(df_base)), random_state=42
     )
-
 
     merged = (
         pd.concat([df_drift, df_base_sample])
@@ -92,7 +91,7 @@ def merge_datasets(df_drift, df_base, ratio=0.3):
 
 
 # ============================================================
-# Stream generator using feature_order
+# STREAM GENERATOR
 # ============================================================
 def record_stream(df, feature_order):
     X = df[feature_order]
@@ -103,20 +102,17 @@ def record_stream(df, feature_order):
 
 
 # ============================================================
-# ARF Predictor wrapper
+# PYFUNC WRAPPER (INCREMENTAL)
 # ============================================================
-class ARFPredictor(pyfunc.PythonModel):
+class ARFIncrementalPredictor(pyfunc.PythonModel):
     def load_context(self, context):
+        artifacts = context.artifacts
 
-        artifact_dir = context.artifacts["artifacts"]
-
-        self.model         = cloudpickle.load(open(f"{artifact_dir}/model.pkl", "rb"))
-        self.scaler        = cloudpickle.load(open(f"{artifact_dir}/scaler.pkl", "rb"))
-        self.encoder       = cloudpickle.load(open(f"{artifact_dir}/label_encoder.pkl", "rb"))
-        self.feature_order = cloudpickle.load(open(f"{artifact_dir}/feature_order.pkl", "rb"))
-        self.replay        = cloudpickle.load(open(f"{artifact_dir}/replay.pkl", "rb"))
-
-
+        self.model         = cloudpickle.load(open(artifacts["model"], "rb"))
+        self.scaler        = cloudpickle.load(open(artifacts["scaler"], "rb"))
+        self.encoder       = cloudpickle.load(open(artifacts["encoder"], "rb"))
+        self.feature_order = cloudpickle.load(open(artifacts["feature_order"], "rb"))
+        self.replay        = cloudpickle.load(open(artifacts["replay"], "rb"))
 
     def predict(self, context, df):
         preds = []
@@ -127,7 +123,7 @@ class ARFPredictor(pyfunc.PythonModel):
 
 
 # ============================================================
-# MAIN Retrain logic
+# MAIN TRAINING LOOP
 # ============================================================
 def main():
 
@@ -155,27 +151,25 @@ def main():
     print(f"Incremental Accuracy: {acc.get():.4f}")
     print(f"Duration: {time.time() - t0:.2f}s")
 
-    # Save updated artifacts
-    cloudpickle.dump(model,         open("model.pkl", "wb"))
-    cloudpickle.dump(scaler,        open("scaler.pkl", "wb"))
-    cloudpickle.dump(encoder,       open("encoder.pkl", "wb"))
+    cloudpickle.dump(model, open("model.pkl", "wb"))
+    cloudpickle.dump(scaler, open("scaler.pkl", "wb"))
+    cloudpickle.dump(encoder, open("encoder.pkl", "wb"))
     cloudpickle.dump(feature_order, open("feature_order.pkl", "wb"))
-    cloudpickle.dump(replay,        open("replay.pkl", "wb"))
+    cloudpickle.dump(replay, open("replay.pkl", "wb"))
 
-    # Log new model to MLflow
     with mlflow.start_run(run_name="incremental_retrain"):
 
         mlflow.log_metric("incremental_acc", acc.get())
 
         mlflow.pyfunc.log_model(
             artifact_path="arf_model",
-            python_model=ARFPredictor(),
+            python_model=ARFIncrementalPredictor(),
             artifacts={
                 "model": "model.pkl",
                 "scaler": "scaler.pkl",
                 "encoder": "encoder.pkl",
                 "feature_order": "feature_order.pkl",
-                "replay": "replay.pkl"
+                "replay": "replay.pkl",
             },
             registered_model_name=MODEL_NAME,
         )
@@ -187,7 +181,7 @@ def main():
             name=MODEL_NAME,
             version=new_version,
             stage="Staging",
-            archive_existing_versions=False
+            archive_existing_versions=False,
         )
 
         print(f"New version {new_version} promoted → STAGING")
