@@ -185,18 +185,19 @@ def main():
         mlflow.log_params(BEST_PARAMS)
 
         mlflow.log_metrics({
-            "acc_incremental": acc.get(),
-            "precision": prec.get(),
-            "recall": rec.get(),
-            "f1": f1.get(),
-            "kappa": kappa.get(),
-            "logloss": loss.get(),
-            "duration": duration,
-            "samples_used": len(df),
+            "acc": float(acc.get()),
+            "precision": float(prec.get()),
+            "recall": float(rec.get()),
+            "f1": float(f1.get()),
+            "kappa": float(kappa.get()),
+            "logloss": float(loss.get()),
+            "duration": float(duration),
+            "samples_used": float(len(df)),
             "base_ratio": 0.3,
             "drift_ratio": 0.7,
-            "prev_version": prod_ver,
+            "prev_version": float(prod_ver),
         })
+
 
         for f in ["model.pkl", "scaler.pkl", "label_encoder.pkl",
                   "feature_order.pkl", "replay.pkl"]:
