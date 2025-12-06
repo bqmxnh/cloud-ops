@@ -23,7 +23,7 @@ mlflow.set_experiment("ARF Incremental Retrain")
 s3 = boto3.client("s3")
 
 # ============================================================
-# BEST PARAMETERS (FIXED)
+# FIXED BEST PARAMS (for reference logging)
 # ============================================================
 BEST_PARAMS = {
     "n_models": 13,
@@ -38,7 +38,7 @@ BEST_PARAMS = {
 }
 
 # ============================================================
-# LOAD PRODUCTION MODEL (JOBLIB ONLY)
+# 1. LOAD PRODUCTION MODEL (JOBLIB)
 # ============================================================
 def load_production_model():
     client = MlflowClient()
@@ -46,19 +46,21 @@ def load_production_model():
 
     print(f"Loading PRODUCTION version={prod.version}")
 
-    local = mlflow.artifacts.download_artifacts(f"models:/{MODEL_NAME}/Production")
+    local_dir = mlflow.artifacts.download_artifacts(
+        artifact_uri=f"models:/{MODEL_NAME}/Production"
+    )
 
-    model         = joblib.load(os.path.join(local, "model.pkl"))
-    scaler        = joblib.load(os.path.join(local, "scaler.pkl"))
-    encoder       = joblib.load(os.path.join(local, "label_encoder.pkl"))
-    feature_order = joblib.load(os.path.join(local, "feature_order.pkl"))
-    replay        = joblib.load(os.path.join(local, "replay.pkl"))
+    model         = joblib.load(os.path.join(local_dir, "model.pkl"))
+    scaler        = joblib.load(os.path.join(local_dir, "scaler.pkl"))
+    encoder       = joblib.load(os.path.join(local_dir, "label_encoder.pkl"))
+    feature_order = joblib.load(os.path.join(local_dir, "feature_order.pkl"))
+    replay        = joblib.load(os.path.join(local_dir, "replay.pkl"))
 
     return model, scaler, encoder, feature_order, replay, prod.version
 
 
 # ============================================================
-# LOAD CSV FROM S3
+# 2. LOAD CSV FULLY (DRIFT ONLY — small)
 # ============================================================
 def load_s3_csv(key):
     obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
@@ -66,20 +68,48 @@ def load_s3_csv(key):
 
 
 # ============================================================
-# MERGE 70/30
+# 3. LOAD BASE DATASET FROM S3 USING CHUNKS (NO OOM!)
+# ============================================================
+def sample_base_from_s3(key, n_samples):
+    """
+    Đọc file base.csv theo chunks 50k rows và chỉ sample n_samples rows.
+    Không bao giờ load toàn bộ file vào RAM.
+    """
+    print(f"Sampling {n_samples} rows from base dataset (chunked read)...")
+
+    obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+    stream = io.BytesIO(obj["Body"].read())
+
+    sampled_chunks = []
+    chunk_size = 50000
+
+    for chunk in pd.read_csv(stream, chunksize=chunk_size):
+        take = min(n_samples, len(chunk))
+
+        sampled = chunk.sample(n=take, random_state=42)
+        sampled_chunks.append(sampled)
+
+        n_samples -= take
+        if n_samples <= 0:
+            break
+
+    df_base = pd.concat(sampled_chunks, ignore_index=True)
+    print(f"Sampled base size = {len(df_base)} rows")
+
+    return df_base
+
+
+# ============================================================
+# 4. MERGE DRIFT + BASE (70/30)
 # ============================================================
 def merge_70_30(df_drift, df_base):
-    n_drift = len(df_drift)
-    n_base  = int(n_drift * 0.3 / 0.7)
-    base_sample = df_base.sample(n=min(n_base, len(df_base)), random_state=42)
-
-    merged = pd.concat([df_drift, base_sample]).sample(frac=1.0, random_state=42)
-    print(f"Merged dataset: drift={len(df_drift)}, base={len(base_sample)}, total={len(merged)}")
+    merged = pd.concat([df_drift, df_base]).sample(frac=1.0, random_state=42)
+    print(f"Merged dataset total={len(merged)}")
     return merged.reset_index(drop=True)
 
 
 # ============================================================
-# STREAM
+# 5. STREAM GENERATOR
 # ============================================================
 def stream(df, order):
     X = df[order]
@@ -89,45 +119,43 @@ def stream(df, order):
 
 
 # ============================================================
-# MAIN RETRAIN
+# 6. MAIN TRAINING LOOP
 # ============================================================
 def main():
 
-    # --------------------------
-    # 1. Load production model
-    # --------------------------
+    # Load production model
     model, scaler, encoder, feature_order, replay, prod_ver = load_production_model()
 
-    # --------------------------
-    # 2. Load drift + base datasets
-    # --------------------------
+    # Load drift dataset (small)
     df_drift = load_s3_csv("drift/drift.csv")
-    df_base  = load_s3_csv("base/base.csv")
+
+    # Determine number of base samples needed (70/30)
+    n_base_needed = int(len(df_drift) * 0.3 / 0.7)
+
+    # Load base dataset from S3 using chunk sampling (NO OOM)
+    df_base = sample_base_from_s3("base/base.csv", n_base_needed)
+
+    # Merge
     df = merge_70_30(df_drift, df_base)
 
-    # --------------------------
-    # 3. Metrics before/after training
-    # --------------------------
+    # Metrics
     acc  = metrics.Accuracy()
     f1   = metrics.F1()
     prec = metrics.Precision()
     rec  = metrics.Recall()
     kappa = metrics.CohenKappa()
-
     loss = metrics.LogLoss()
 
+    print("\nStarting incremental retrain...\n")
     t0 = time.time()
-    print("\nStarting incremental learning...\n")
 
-    # --------------------------
-    # 4. Incremental update loop
-    # --------------------------
+    # Incremental training loop
     for xi, yi_lbl in stream(df, feature_order):
         yi = int(encoder.transform([yi_lbl])[0])
 
-        # predict
-        pred = model.predict_one(scaler.transform_one(xi))
-        proba = model.predict_proba_one(scaler.transform_one(xi))
+        x_scaled = scaler.transform_one(xi)
+        pred = model.predict_one(x_scaled)
+        proba = model.predict_proba_one(x_scaled)
 
         if pred is not None:
             acc.update(yi, pred)
@@ -137,26 +165,21 @@ def main():
             kappa.update(yi, pred)
             loss.update(yi, proba)
 
-        # update
         scaler.learn_one(xi)
-        model.learn_one(scaler.transform_one(xi), yi)
+        model.learn_one(x_scaled, yi)
 
     duration = time.time() - t0
-    print(f"Incremental retrain completed in {duration:.2f} seconds")
-    print(f"Acc={acc.get():.5f}, F1={f1.get():.5f}")
+    print(f"Retrain completed in {duration:.2f}s")
+    print(f"Final Acc={acc.get():.5f}, F1={f1.get():.5f}")
 
-    # --------------------------
-    # 5. Save artifacts (joblib)
-    # --------------------------
-    joblib.dump(model,         "model.pkl")
-    joblib.dump(scaler,        "scaler.pkl")
-    joblib.dump(encoder,       "encoder.pkl")
+    # Save artifacts
+    joblib.dump(model, "model.pkl")
+    joblib.dump(scaler, "scaler.pkl")
+    joblib.dump(encoder, "label_encoder.pkl")
     joblib.dump(feature_order, "feature_order.pkl")
-    joblib.dump(replay,        "replay.pkl")
+    joblib.dump(replay, "replay.pkl")
 
-    # --------------------------
-    # 6. Log into MLflow + register model
-    # --------------------------
+    # MLflow logging
     with mlflow.start_run(run_name="Incremental Retrain") as run:
 
         mlflow.log_params(BEST_PARAMS)
@@ -175,12 +198,13 @@ def main():
             "prev_version": prod_ver,
         })
 
-        # upload files
-        for f in ["model.pkl", "scaler.pkl", "encoder.pkl", "feature_order.pkl", "replay.pkl"]:
+        for f in ["model.pkl", "scaler.pkl", "label_encoder.pkl",
+                  "feature_order.pkl", "replay.pkl"]:
             mlflow.log_artifact(f)
 
         run_id = run.info.run_id
 
+    # Register new version
     client = MlflowClient()
     registered = mlflow.register_model(
         model_uri=f"runs:/{run_id}",
@@ -194,10 +218,11 @@ def main():
         archive_existing_versions=False
     )
 
-    print(f"\nNew model version {registered.version} → STAGING\n")
+    print(f"New model version {registered.version} → STAGING")
 
-    # cleanup
-    for f in ["model.pkl", "scaler.pkl", "encoder.pkl", "feature_order.pkl", "replay.pkl"]:
+    # Cleanup
+    for f in ["model.pkl", "scaler.pkl", "label_encoder.pkl",
+              "feature_order.pkl", "replay.pkl"]:
         os.remove(f)
 
 
