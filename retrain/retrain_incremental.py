@@ -1,8 +1,6 @@
 import pandas as pd
 import boto3
 import io
-from pathlib import Path
-from collections import deque
 import cloudpickle
 import mlflow
 from mlflow import pyfunc
@@ -13,10 +11,10 @@ import os
 from river import preprocessing, metrics, forest
 
 # ============================================================
-# MLflow config
+# CONFIG
 # ============================================================
 MLFLOW_URL = os.getenv("MLFLOW_TRACKING_URI", "https://mlflow.qmuit.id.vn")
-MODEL_NAME = os.getenv("MODEL_NAME", "ARF_IDS_MODEL")
+MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")   # phải trùng tên khi bạn upload baseline
 S3_BUCKET = os.getenv("S3_BUCKET", "qmuit-ids-training-data-store")
 
 mlflow.set_tracking_uri(MLFLOW_URL)
@@ -43,18 +41,20 @@ def load_production_model():
 
     print(f"Loading Production Model version={prod.version}")
 
-    model_uri = f"models:/{MODEL_NAME}/Production"
-    pyf = mlflow.pyfunc.load_model(model_uri)
+    pyf_model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}/Production")
 
-    arf_model = cloudpickle.load(open(pyf._context.artifacts["model"], "rb"))
-    scaler = cloudpickle.load(open(pyf._context.artifacts["scaler"], "rb"))
-    encoder = cloudpickle.load(open(pyf._context.artifacts["label_encoder"], "rb"))
+    # Load artifacts
+    model         = cloudpickle.load(open(pyf_model._context.artifacts["model"], "rb"))
+    scaler        = cloudpickle.load(open(pyf_model._context.artifacts["scaler"], "rb"))
+    encoder       = cloudpickle.load(open(pyf_model._context.artifacts["encoder"], "rb"))
+    feature_order = cloudpickle.load(open(pyf_model._context.artifacts["feature_order"], "rb"))
+    replay        = cloudpickle.load(open(pyf_model._context.artifacts["replay"], "rb"))
 
-    return arf_model, scaler, encoder, prod.version
+    return model, scaler, encoder, feature_order, replay, prod.version
 
 
 # ============================================================
-# Load Data FROM S3
+# Load training data
 # ============================================================
 def load_datasets():
     df_drift = load_s3_csv("drift/drift.csv")
@@ -89,10 +89,10 @@ def merge_datasets(df_drift, df_base, ratio=0.3):
 
 
 # ============================================================
-# Convert dataset to river stream
+# Stream generator using feature_order
 # ============================================================
-def record_stream(df):
-    X = df.drop(columns=["Label"])
+def record_stream(df, feature_order):
+    X = df[feature_order]
     y = df["Label"].astype(str)
 
     for xi, yi in zip(X.to_dict(orient="records"), y):
@@ -103,55 +103,58 @@ def record_stream(df):
 # ARF Predictor wrapper
 # ============================================================
 class ARFPredictor(pyfunc.PythonModel):
-
     def load_context(self, context):
-        self.model = cloudpickle.load(open(context.artifacts["model"], "rb"))
-        self.scaler = cloudpickle.load(open(context.artifacts["scaler"], "rb"))
-        self.encoder = cloudpickle.load(open(context.artifacts["label_encoder"], "rb"))
+        self.model         = cloudpickle.load(open(context.artifacts["model"], "rb"))
+        self.scaler        = cloudpickle.load(open(context.artifacts["scaler"], "rb"))
+        self.encoder       = cloudpickle.load(open(context.artifacts["encoder"], "rb"))
+        self.feature_order = cloudpickle.load(open(context.artifacts["feature_order"], "rb"))
+        self.replay        = cloudpickle.load(open(context.artifacts["replay"], "rb"))
 
     def predict(self, context, df):
         preds = []
-        for row in df.to_dict(orient="records"):
+        for row in df[self.feature_order].to_dict(orient="records"):
             x_scaled = self.scaler.transform_one(row)
             preds.append(self.model.predict_one(x_scaled))
         return preds
 
 
 # ============================================================
-# MAIN Incremental Retrain Logic
+# MAIN Retrain logic
 # ============================================================
 def main():
 
-    arf_model, scaler, encoder, prod_version = load_production_model()
+    model, scaler, encoder, feature_order, replay, prod_version = load_production_model()
 
     df_drift, df_base = load_datasets()
     df = merge_datasets(df_drift, df_base, ratio=0.3)
 
     acc = metrics.Accuracy()
 
+    print("Starting Incremental Training...")
     t0 = time.time()
-    print("🚀 Starting Incremental Training...")
 
-    for xi, yi_label in record_stream(df):
+    for xi, yi_label in record_stream(df, feature_order):
 
         yi = int(encoder.transform([yi_label])[0])
 
-        pred = arf_model.predict_one(scaler.transform_one(xi))
+        pred = model.predict_one(scaler.transform_one(xi))
         if pred is not None:
             acc.update(yi, pred)
 
         scaler.learn_one(xi)
-        arf_model.learn_one(scaler.transform_one(xi), yi)
+        model.learn_one(scaler.transform_one(xi), yi)
 
     print(f"Incremental Accuracy: {acc.get():.4f}")
-    print(f"Done in {time.time() - t0:.2f}s")
+    print(f"Duration: {time.time() - t0:.2f}s")
 
-    # Save artifacts
-    cloudpickle.dump(arf_model, open("model.pkl", "wb"))
-    cloudpickle.dump(scaler, open("scaler.pkl", "wb"))
-    cloudpickle.dump(encoder, open("label_encoder.pkl", "wb"))
+    # Save updated artifacts
+    cloudpickle.dump(model,         open("model.pkl", "wb"))
+    cloudpickle.dump(scaler,        open("scaler.pkl", "wb"))
+    cloudpickle.dump(encoder,       open("encoder.pkl", "wb"))
+    cloudpickle.dump(feature_order, open("feature_order.pkl", "wb"))
+    cloudpickle.dump(replay,        open("replay.pkl", "wb"))
 
-    # Log to MLflow
+    # Log new model to MLflow
     with mlflow.start_run(run_name="incremental_retrain"):
 
         mlflow.log_metric("incremental_acc", acc.get())
@@ -162,7 +165,9 @@ def main():
             artifacts={
                 "model": "model.pkl",
                 "scaler": "scaler.pkl",
-                "label_encoder": "label_encoder.pkl"
+                "encoder": "encoder.pkl",
+                "feature_order": "feature_order.pkl",
+                "replay": "replay.pkl"
             },
             registered_model_name=MODEL_NAME,
         )
@@ -177,7 +182,7 @@ def main():
             archive_existing_versions=False
         )
 
-        print(f"New version {new_version} → STAGING")
+        print(f"New version {new_version} promoted → STAGING")
 
 
 if __name__ == "__main__":
