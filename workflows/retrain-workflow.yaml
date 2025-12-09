@@ -67,6 +67,13 @@ spec:
           path: /data
     container:
       image: bqmxnh/cloud-ops-retrain:latest
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "500m"
+        limits:
+          memory: "4Gi"
+          cpu: "1"
       env:
         - name: MLFLOW_TRACKING_URI
           value: "https://mlflow.qmuit.id.vn"
@@ -75,8 +82,8 @@ spec:
         - name: MODEL_STAGE
           value: "Production"
       command: ["bash", "-c"]
-      args:
-        - |
-          echo "Starting ARF Incremental Retraining..."
-          python retrain_arf.py
-          echo "Retraining Completed."
+      args: |
+        echo "Starting ARF Incremental Retraining..."
+        python retrain_arf.py
+        echo "Retraining Completed."
+
