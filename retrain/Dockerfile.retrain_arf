@@ -1,0 +1,15 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Copy retrain script + requirements
+COPY retrain_arf.py retrain_arf.py
+COPY requirements.retrain_arf.txt requirements.txt
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Ensure folders exist
+RUN mkdir -p /data && mkdir -p /output
+
+ENTRYPOINT ["python", "retrain_arf.py"]

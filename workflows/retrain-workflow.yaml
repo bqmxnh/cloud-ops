@@ -1,13 +1,82 @@
-# Retrain workflow disabled
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  name: retrain-workflow-disabled
+  name: arf-incremental-retrain
 spec:
-  entrypoint: noop
+  entrypoint: main
+  serviceAccountName: argo-workflow
+
   templates:
-  - name: noop
+
+  # ============================================================
+  # MAIN DAG
+  # ============================================================
+  - name: main
+    dag:
+      tasks:
+
+      # Step 1 — Download all required datasets from S3
+      - name: download-data
+        template: s3-download
+
+      # Step 2 — Run retraining script using retrain_arf.py
+      - name: retrain
+        dependencies: [download-data]
+        template: retrain-arf
+        arguments:
+          artifacts:
+            - name: data
+              from: "{{tasks.download-data.outputs.artifacts.data}}"
+
+  # ============================================================
+  # TEMPLATE 1: S3 Download step
+  # ============================================================
+  - name: s3-download
     container:
-      image: alpine
-      command: ["sh", "-c"]
-      args: ["echo 'Retrain workflow is disabled'"]
+      image: amazon/aws-cli:2.13.7
+      command: ["bash", "-c"]
+      args:
+        - |
+          mkdir -p /data
+          
+          echo "Downloading Base..."
+          aws s3 cp s3://qmuit-training-data-store/base/base.csv /data/base.csv
+
+          echo "Downloading Drift..."
+          aws s3 cp s3://qmuit-training-data-store/drift/drift.csv /data/drift.csv
+
+          echo "Downloading Test 1..."
+          aws s3 cp s3://qmuit-training-data-store/test/test1.csv /data/test1.csv
+
+          echo "Downloading Test 2..."
+          aws s3 cp s3://qmuit-training-data-store/test/test2.csv /data/test2.csv
+
+          echo "All datasets downloaded into /data"
+    outputs:
+      artifacts:
+        - name: data
+          path: /data
+
+  # ============================================================
+  # TEMPLATE 2: Retrain ARF
+  # ============================================================
+  - name: retrain-arf
+    inputs:
+      artifacts:
+        - name: data
+          path: /data
+    container:
+      image: cloud-ops-retrain:latest
+      env:
+        - name: MLFLOW_TRACKING_URI
+          value: "https://mlflow.qmuit.id.vn"
+        - name: MODEL_NAME
+          value: "ARF Baseline Model"
+        - name: MODEL_STAGE
+          value: "Production"
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "Starting ARF Incremental Retraining..."
+          python retrain_arf.py
+          echo "Retraining Completed."
