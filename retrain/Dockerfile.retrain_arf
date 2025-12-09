@@ -2,8 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY retrain/retrain_arf.py /app/retrain_arf.py
-COPY retrain/requirements.retrain_arf.txt /app/requirements.txt
+COPY retrain_arf.py /app/retrain_arf.py
+COPY requirements.retrain_arf.txt /app/requirements.txt
 
 RUN pip install --no-cache-dir -r requirements.txt
 
