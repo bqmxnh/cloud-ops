@@ -1,55 +1,46 @@
 from fastapi import APIRouter
+from app.schemas import FlowSchema
+from app import globals as G
+from app.websocket import broadcast
 import time
-from app.schemas import FlowSchema, PredictionResponse
-import app.globals as G
-from app.metrics import PREDICTION_COUNT, LATENCY
 
 router = APIRouter()
 
-@router.post("", response_model=PredictionResponse)
-def predict(flow: FlowSchema):
+@router.post("")
+async def predict(flow: FlowSchema):
+
     start = time.time()
 
-    print("\n=== [PREDICT] ======================")
-
     if flow.flow_id is None:
-        print("ERROR: Missing Flow ID")
-        return {"error": "Flow ID is required"}
+        return {"error": "Flow ID required"}
 
-    flow_id = flow.flow_id
-    print("Flow ID:", flow_id)
+    x_scaled = G.scaler.transform_one(flow.features)
 
-    try:
-        x = G.scaler.transform_one(flow.features)
+    proba = G.model.predict_proba_one(x_scaled)
+    if proba:
+        pred = max(proba, key=proba.get)
+        conf = float(proba[pred])
+    else:
+        pred = G.model.predict_one(x_scaled)
+        conf = 1.0
 
-        with G.model_lock:
-            proba = G.model.predict_proba_one(x)
+    decoded = G.encoder.inverse_transform([int(pred)])[0]
 
-            if proba:
-                pred = max(proba, key=proba.get)
-                conf = float(proba[pred])
-            else:
-                pred = G.model.predict_one(x)
-                conf = 1.0
+    G.prediction_history[flow.flow_id] = (decoded, int(pred))
 
-            decoded = G.encoder.inverse_transform([int(pred)])[0]
+    # Websocket push
+    await broadcast("new_flow", {
+        "flow_id": flow.flow_id,
+        "prediction": decoded,
+        "confidence": conf,
+        "features": flow.features
+    })
 
-        G.prediction_history[flow_id] = (decoded, int(pred))
+    latency = (time.time() - start) * 1000
 
-        print(f"Saved prediction_history[{flow_id}] = ({decoded}, {int(pred)})")
-        print("prediction_history id():", id(G.prediction_history))
-
-        latency = (time.time() - start) * 1000
-        LATENCY.observe(latency)
-        PREDICTION_COUNT.inc()
-
-        return PredictionResponse(
-            flow_id=flow_id,
-            prediction=str(decoded),
-            confidence=round(conf, 4),
-            latency_ms=round(latency, 3)
-        )
-
-    except Exception as e:
-        print("[PREDICT ERROR]:", e)
-        return {"error": str(e)}
+    return {
+        "flow_id": flow.flow_id,
+        "prediction": decoded,
+        "confidence": conf,
+        "latency_ms": round(latency, 3)
+    }

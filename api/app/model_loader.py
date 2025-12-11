@@ -21,6 +21,7 @@ def init_model():
         G.model = load_from_s3("model.pkl")
         G.scaler = load_from_s3("scaler.pkl")
         G.encoder = load_from_s3("label_encoder.pkl")
+        G.FEATURE_ORDER = load_from_s3("feature_order.pkl")
         print("[MODEL] Loaded successfully")
     except Exception as e:
         print(f"[ERROR] Model load failed: {e}")

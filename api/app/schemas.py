@@ -15,3 +15,9 @@ class PredictionResponse(BaseModel):
     prediction: str
     confidence: float
     latency_ms: float
+
+class DriftEvent(BaseModel):
+    timestamp: str
+    recent_error: float
+    global_error: float
+    reason: str

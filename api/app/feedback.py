@@ -1,81 +1,63 @@
 from fastapi import APIRouter
 from app.schemas import FeedbackSchema
-import app.globals as G
-from app.metrics import FEEDBACK_COUNT, LEARN_COUNT
+from app import globals as G
+from app.websocket import broadcast
+from app.utils.drift_timeline import add_drift_event
 from app.utils.preprocess import sanitize
 
 router = APIRouter()
 
 @router.post("")
-def feedback(data: FeedbackSchema):
-    FEEDBACK_COUNT.inc()
+async def feedback(data: FeedbackSchema):
 
-    print("\n====================== FEEDBACK ======================")
-    print(f"Flow ID            = {data.flow_id}")
-    print(f"True raw label     = '{data.true_label}'")
-    print(f"prediction_history id = {id(G.prediction_history)}")
-
-    # ------------------------------------------------------------
-    # LABEL NORMALIZATION
-    # ------------------------------------------------------------
-    lookup = {c.lower(): c for c in G.encoder.classes_}
-    true_raw = data.true_label.strip()
-
-    if true_raw.lower() not in lookup:
-        return {"error": f"Label not in encoder: {true_raw}"}
-
-    normalized_label = lookup[true_raw.lower()]
-    y_true = int(G.encoder.transform([normalized_label])[0])
-
-    # ------------------------------------------------------------
-    # PREDICTION HISTORY
-    # ------------------------------------------------------------
     if data.flow_id not in G.prediction_history:
-        return {"error": f"No prediction for Flow ID {data.flow_id}"}
+        return {"error": "Unknown Flow ID"}
 
-    pred_str, pred_id = G.prediction_history[data.flow_id]
+    pred_label, pred_id = G.prediction_history[data.flow_id]
 
-    is_error = int(pred_id != y_true)
+    y_true = int(G.encoder.transform([data.true_label.upper()])[0])
+    match = (pred_id == y_true)
+
+    is_error = 0 if match else 1
+    G.error_buffer.append(is_error)
+
+    # ADWIN
     G.adwin.update(is_error)
-    drift_detected = G.adwin.drift_detected
+    drift_flag = G.adwin.drift_detected
 
-    # ------------------------------------------------------------
-    # FEATURES + SCALER (FIXED)
-    # ------------------------------------------------------------
-    features = sanitize(data.features)
+    # DRIFT EVALUATION
+    if drift_flag:
+        recent_err = sum(G.error_buffer) / len(G.error_buffer)
+        global_err = G.adwin.estimation
 
-    # FIX 1 — update scaler
-    G.scaler.learn_one(features)
+        is_degradation = recent_err > global_err
 
-    # FIX 2 — transform after learning scaler
-    x = G.scaler.transform_one(features)
+        if is_degradation:
+            event = add_drift_event(recent_err, global_err, "degradation")
 
-    with G.model_lock:
+            await broadcast("drift_event", event)
 
-        # BEFORE LEARNING
-        proba_before = G.model.predict_proba_one(x)
-        pred_before = max(proba_before, key=proba_before.get)
-        conf_before = float(proba_before[pred_before])
+            return {
+                "flow_id": data.flow_id,
+                "predicted": pred_label,
+                "true_label": data.true_label,
+                "match": match,
+                "drift_detected": True,
+                "reason": "performance degradation"
+            }
 
-        need_learning = (pred_before != y_true) or (conf_before < 0.8)
-
-        if need_learning:
-            G.model.learn_one(x, y_true)
-            LEARN_COUNT.inc()
-
-        # AFTER LEARNING
-        proba_after = G.model.predict_proba_one(x)
-        pred_after = max(proba_after, key=proba_after.get)
-        conf_after = float(proba_after[pred_after])
+    # NO DRIFT → normal metrics
+    G.metric_acc.update(y_true, pred_id)
+    G.metric_prec.update(y_true, pred_id)
+    G.metric_rec.update(y_true, pred_id)
+    G.metric_f1.update(y_true, pred_id)
+    G.metric_kappa.update(y_true, pred_id)
+    G.metric_cm.update(y_true, pred_id)
 
     return {
-        "status": "ok",
-        "flow_id": str(data.flow_id),
-        "true_label": str(normalized_label),
-        "pred_before": str(G.encoder.inverse_transform([int(pred_before)])[0]),
-        "conf_before": round(conf_before, 4),
-        "pred_after": str(G.encoder.inverse_transform([int(pred_after)])[0]),
-        "conf_after": round(conf_after, 4),
-        "need_learning": bool(need_learning),
-        "drift_detected": bool(drift_detected),
+        "flow_id": data.flow_id,
+        "predicted": pred_label,
+        "true_label": data.true_label,
+        "match": match,
+        "drift_detected": False
     }
