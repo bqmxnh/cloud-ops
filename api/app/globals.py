@@ -13,6 +13,9 @@ FEATURE_ORDER = None
 
 model_lock = threading.Lock()
 
+current_model_version = None
+model_reload_count = 0
+
 # PREDICTION HISTORY
 prediction_history = {}
 

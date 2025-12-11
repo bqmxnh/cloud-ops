@@ -1,8 +1,8 @@
-from fastapi import APIRouter
-from fastapi.websockets import WebSocket
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
 ws_clients = set()
+
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -13,18 +13,22 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             await ws.receive_text()
-    except:
-        ws_clients.remove(ws)
+    except WebSocketDisconnect:
         print("[WS] Client disconnected")
+    except:
+        pass
+    finally:
+        ws_clients.discard(ws)
 
 
 async def broadcast(event_type: str, data: dict):
-    dead = []
+    """Gửi sự kiện real-time cho toàn bộ client"""
+    dead_clients = []
     for ws in ws_clients:
         try:
             await ws.send_json({"type": event_type, "data": data})
         except:
-            dead.append(ws)
+            dead_clients.append(ws)
 
-    for ws in dead:
-        ws_clients.remove(ws)
+    for ws in dead_clients:
+        ws_clients.discard(ws)
