@@ -5,6 +5,8 @@ from app.websocket import router as ws_router
 from app.inference import router as predict_router
 from app.feedback import router as feedback_router
 from app.metrics import router as metrics_router
+from app import globals as G
+
 
 app = FastAPI(title="IDS Drift Detector – v9.0")
 
@@ -31,5 +33,5 @@ def root():
         "version": "9.0",
         "drift_detection": True,
         "training": False,
-        "timeline_size":  len(app.globals.drift_timeline)
+        "timeline_size":  len(G.drift_timeline)
     }
