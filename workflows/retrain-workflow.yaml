@@ -82,7 +82,8 @@ spec:
         - name: MODEL_STAGE
           value: "Production"
       command: ["bash", "-c"]
-      args: |
+      args:
+      - |
         echo "Starting ARF Incremental Retraining..."
         python retrain_arf.py
         echo "Retraining Completed."
