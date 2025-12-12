@@ -123,7 +123,7 @@ def auto_refresh_worker():
             new_version = get_production_version()
 
             if new_version and new_version != G.current_model_version:
-                print(f"\n[MODEL] 🔄 Detected new Production version {new_version}")
+                print(f"\n[MODEL] Detected new Production version {new_version}")
                 init_model()
 
                 # Notify UI

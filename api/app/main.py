@@ -6,6 +6,8 @@ from app.inference import router as predict_router
 from app.feedback import router as feedback_router
 from app.metrics import router as metrics_router
 from app import globals as G
+import asyncio
+
 
 
 app = FastAPI(title="IDS Drift Detector – v9.0")
@@ -18,8 +20,26 @@ app.add_middleware(
 )
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     init_model()
+    # Start cleanup task for old prediction events
+    asyncio.create_task(cleanup_prediction_events())
+
+async def cleanup_prediction_events():
+    """Remove stale events every 5 minutes"""
+    while True:
+        await asyncio.sleep(300)  # 5 mins
+        
+        stale_flows = [
+            flow_id for flow_id in G.prediction_events.keys()
+            if flow_id not in G.prediction_history
+        ]
+        
+        for flow_id in stale_flows:
+            G.prediction_events.pop(flow_id, None)
+        
+        if stale_flows:
+            print(f"[CLEANUP] Removed {len(stale_flows)} stale events")
 
 app.include_router(ws_router)
 app.include_router(predict_router, prefix="/predict", tags=["Predict"])

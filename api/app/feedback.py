@@ -1,15 +1,15 @@
+# app/routers/feedback.py
 from fastapi import APIRouter
 from app.schemas import FeedbackSchema
 from app import globals as G
 from app.websocket import broadcast
 from app.utils.drift_timeline import add_drift_event
-from app.utils.preprocess import sanitize
 import time
 import boto3
+import asyncio
 
 router = APIRouter()
 
-# ===== DynamoDB Table =====
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 table = dynamodb.Table("ids_log_system")
 
@@ -17,19 +17,35 @@ table = dynamodb.Table("ids_log_system")
 @router.post("")
 async def feedback(data: FeedbackSchema):
 
-    import asyncio
+    # -----------------------
+    # WAIT FOR PREDICTION
+    # -----------------------
+    if data.flow_id not in G.prediction_history:
+        # Tạo event nếu chưa có (trường hợp feedback đến trước predict)
+        if data.flow_id not in G.prediction_events:
+            G.prediction_events[data.flow_id] = asyncio.Event()
+        
+        try:
+            # Đợi tối đa 3 giây
+            await asyncio.wait_for(
+                G.prediction_events[data.flow_id].wait(), 
+                timeout=3.0
+            )
+        except asyncio.TimeoutError:
+            print(f"[TIMEOUT] Flow {data.flow_id} not predicted after 3s")
+            return {"error": "Unknown Flow ID", "reason": "timeout"}
 
-    for _ in range(3):
-        if data.flow_id in G.prediction_history:
-            break
-        await asyncio.sleep(0.008) 
     # -----------------------
     # VALIDATION
     # -----------------------
     if data.flow_id not in G.prediction_history:
-        return {"error": "Unknown Flow ID"}
+        print(f"[ERROR] Flow {data.flow_id} still not in history after wait")
+        return {"error": "Unknown Flow ID", "reason": "not_found"}
 
     pred_label, pred_id = G.prediction_history[data.flow_id]
+
+    # Clean up event sau khi dùng xong
+    G.prediction_events.pop(data.flow_id, None)
 
     y_true = int(G.encoder.transform([data.true_label.upper()])[0])
     match = (pred_id == y_true)
@@ -53,30 +69,26 @@ async def feedback(data: FeedbackSchema):
         is_degradation = recent_err > global_err
 
         if is_degradation:
-
-            # Store drift event in local drift timeline (your existing logic)
             event = add_drift_event(recent_err, global_err, "degradation")
-
-            # =======================================
-            #  NEW: STORE DRIFT EVENT IN DYNAMODB
-            # =======================================
             drift_ts = int(time.time() * 1000)
 
-            table.put_item(Item={
-                "pk": "drift_event",
-                "timestamp": drift_ts,
-                "flow_id": data.flow_id,
-                "true_label": data.true_label,
-                "predicted": pred_label,
-                "reason": "performance_degradation",
-                "type": "DRIFT"
-            })
+            # Query DynamoDB
+            resp = table.query(
+                KeyConditionExpression=boto3.dynamodb.conditions.Key("flow_id").eq(data.flow_id)
+            )
 
-            print(f"[DYNAMODB] Logged DRIFT_EVENT at {drift_ts}")
+            for item in resp.get("Items", []):
+                table.update_item(
+                    Key={
+                        "flow_id": data.flow_id,
+                        "timestamp": item["timestamp"]
+                    },
+                    UpdateExpression="SET drift_detected = :v",
+                    ExpressionAttributeValues={":v": True}
+                )
 
-            # =======================================
-            #  SEND WEBSOCKET NOTIFICATION
-            # =======================================
+            print(f"[DDB] Marked drift_detected=True for flow_id {data.flow_id}")
+
             await broadcast("drift_event", {
                 "timestamp": drift_ts,
                 "flow_id": data.flow_id,
@@ -85,9 +97,6 @@ async def feedback(data: FeedbackSchema):
                 "type": "DRIFT"
             })
 
-            # =======================================
-            #  RESPONSE TO CLIENT/UI
-            # =======================================
             return {
                 "flow_id": data.flow_id,
                 "predicted": pred_label,
@@ -95,7 +104,7 @@ async def feedback(data: FeedbackSchema):
                 "match": match,
                 "drift_detected": True,
                 "timestamp": drift_ts,
-                "reason": "performance degradation"
+                "reason": "performance_degradation"
             }
 
     # ----------------------------------------------------------
