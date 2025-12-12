@@ -27,6 +27,8 @@ async def predict(flow: FlowSchema):
     decoded = G.encoder.inverse_transform([int(pred)])[0]
 
     G.prediction_history[flow.flow_id] = (decoded, int(pred))
+    # Ensure buffer is flushed before any feedback arrives
+    await asyncio.sleep(0)
 
     # Websocket push
     await broadcast("new_flow", {

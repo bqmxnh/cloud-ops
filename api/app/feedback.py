@@ -17,6 +17,12 @@ table = dynamodb.Table("ids_log_system")
 @router.post("")
 async def feedback(data: FeedbackSchema):
 
+    import asyncio
+
+    for _ in range(3):
+        if data.flow_id in G.prediction_history:
+            break
+        await asyncio.sleep(0.008) 
     # -----------------------
     # VALIDATION
     # -----------------------

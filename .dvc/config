@@ -1,0 +1,4 @@
+[core]
+    remote = trainingstore
+['remote "trainingstore"']
+    url = s3://qmuit-training-data-store
