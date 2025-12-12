@@ -22,7 +22,7 @@ model_reload_count = 0
 prediction_history = {}
 
 # ADWIN DRIFT DETECTOR
-adwin = drift.ADWIN(delta=0.002)
+adwin = drift.ADWIN(delta=0.1)
 error_buffer = deque(maxlen=50)
 
 # DRIFT TIMELINE (list)

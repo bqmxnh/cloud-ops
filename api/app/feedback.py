@@ -26,13 +26,13 @@ async def feedback(data: FeedbackSchema):
             G.prediction_events[data.flow_id] = asyncio.Event()
         
         try:
-            # Đợi tối đa 3 giây
+            # Đợi tối đa 10 giây
             await asyncio.wait_for(
                 G.prediction_events[data.flow_id].wait(), 
-                timeout=3.0
+                timeout=10.0
             )
         except asyncio.TimeoutError:
-            print(f"[TIMEOUT] Flow {data.flow_id} not predicted after 3s")
+            print(f"[TIMEOUT] Flow {data.flow_id} not predicted after 10s")
             return {"error": "Unknown Flow ID", "reason": "timeout"}
 
     # -----------------------
@@ -66,7 +66,7 @@ async def feedback(data: FeedbackSchema):
         recent_err = sum(G.error_buffer) / len(G.error_buffer)
         global_err = G.adwin.estimation
 
-        is_degradation = recent_err > global_err
+        is_degradation = recent_err > global_err * 1.1  # 10% worse
 
         if is_degradation:
             event = add_drift_event(recent_err, global_err, "degradation")
