@@ -6,7 +6,7 @@ from app.websocket import broadcast
 from app.utils.drift_timeline import add_drift_event
 import time
 import boto3
-import asyncio
+from boto3.dynamodb.conditions import Key
 
 router = APIRouter()
 
@@ -17,77 +17,76 @@ table = dynamodb.Table("ids_log_system")
 @router.post("")
 async def feedback(data: FeedbackSchema):
 
-    # -----------------------
-    # WAIT FOR PREDICTION
-    # -----------------------
-    if data.flow_id not in G.prediction_history:
-        # Tạo event nếu chưa có (trường hợp feedback đến trước predict)
-        if data.flow_id not in G.prediction_events:
-            G.prediction_events[data.flow_id] = asyncio.Event()
-        
-        try:
-            # Đợi tối đa 10 giây
-            await asyncio.wait_for(
-                G.prediction_events[data.flow_id].wait(), 
-                timeout=30.0
-            )
-        except asyncio.TimeoutError:
-            print(f"[TIMEOUT] Flow {data.flow_id} not predicted after 30s")
-            return {"error": "Unknown Flow ID", "reason": "timeout"}
+    # ======================================================
+    # 1. LẤY PREDICTION TỪ DYNAMODB (SOURCE OF TRUTH)
+    # ======================================================
+    resp = table.query(
+        KeyConditionExpression=Key("flow_id").eq(data.flow_id),
+        ScanIndexForward=False,   # newest first
+        Limit=1
+    )
 
-    # -----------------------
-    # VALIDATION
-    # -----------------------
-    if data.flow_id not in G.prediction_history:
-        print(f"[ERROR] Flow {data.flow_id} still not in history after wait")
-        return {"error": "Unknown Flow ID", "reason": "not_found"}
+    items = resp.get("Items", [])
+    if not items:
+        return {
+            "error": "Unknown Flow ID",
+            "reason": "not_found_in_db"
+        }
 
-    pred_label, pred_id = G.prediction_history[data.flow_id]
+    item = items[0]
 
-    # Clean up event sau khi dùng xong
-    G.prediction_events.pop(data.flow_id, None)
+    pred_label = item.get("label")          # benign / attack
+    pred_label = pred_label.upper()
+    pred_id = int(G.encoder.transform([pred_label])[0])
 
+    # ======================================================
+    # 2. UPDATE TRUE LABEL VÀO DB
+    # ======================================================
+    table.update_item(
+        Key={
+            "flow_id": data.flow_id,
+            "timestamp": item["timestamp"]
+        },
+        UpdateExpression="SET true_label = :v",
+        ExpressionAttributeValues={
+            ":v": data.true_label.lower()
+        }
+    )
+
+    # ======================================================
+    # 3. SO KHỚP LABEL → ERROR SIGNAL
+    # ======================================================
     y_true = int(G.encoder.transform([data.true_label.upper()])[0])
     match = (pred_id == y_true)
 
     is_error = 0 if match else 1
     G.error_buffer.append(is_error)
 
-    # -----------------------
-    # ADWIN DRIFT DETECTOR
-    # -----------------------
+    # ======================================================
+    # 4. ADWIN DRIFT DETECTION
+    # ======================================================
     G.adwin.update(is_error)
     drift_flag = G.adwin.drift_detected
 
-    # ----------------------------------------------------------
-    #  DRIFT CASE
-    # ----------------------------------------------------------
+    # ======================================================
+    # 5. DRIFT CASE
+    # ======================================================
     if drift_flag:
         recent_err = sum(G.error_buffer) / len(G.error_buffer)
         global_err = G.adwin.estimation
 
-        is_degradation = recent_err > global_err * 1.1  # 10% worse
-
-        if is_degradation:
-            event = add_drift_event(recent_err, global_err, "degradation")
+        if recent_err > global_err * 1.1:
             drift_ts = int(time.time() * 1000)
 
-            # Query DynamoDB
-            resp = table.query(
-                KeyConditionExpression=boto3.dynamodb.conditions.Key("flow_id").eq(data.flow_id)
+            # Đánh dấu drift trong DB
+            table.update_item(
+                Key={
+                    "flow_id": data.flow_id,
+                    "timestamp": item["timestamp"]
+                },
+                UpdateExpression="SET drift_detected = :v",
+                ExpressionAttributeValues={":v": True}
             )
-
-            for item in resp.get("Items", []):
-                table.update_item(
-                    Key={
-                        "flow_id": data.flow_id,
-                        "timestamp": item["timestamp"]
-                    },
-                    UpdateExpression="SET drift_detected = :v",
-                    ExpressionAttributeValues={":v": True}
-                )
-
-            print(f"[DDB] Marked drift_detected=True for flow_id {data.flow_id}")
 
             await broadcast("drift_event", {
                 "timestamp": drift_ts,
@@ -107,9 +106,9 @@ async def feedback(data: FeedbackSchema):
                 "reason": "performance_degradation"
             }
 
-    # ----------------------------------------------------------
-    #  NORMAL (NO DRIFT)
-    # ----------------------------------------------------------
+    # ======================================================
+    # 6. NORMAL METRICS UPDATE
+    # ======================================================
     G.metric_acc.update(y_true, pred_id)
     G.metric_prec.update(y_true, pred_id)
     G.metric_rec.update(y_true, pred_id)
