@@ -2,13 +2,18 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# System deps (git để dùng DVC / MLflow nếu cần)
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.retrain_arf.txt .
-RUN pip install --no-cache-dir -r requirements.retrain_arf.txt
+# Copy requirements trước để cache pip
+COPY requirements.retrain_arf.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY retrain/ /app/retrain/
+# Copy toàn bộ code trong context (check_drift, fetch, retrain, ...)
+COPY . /app/retrain
 
+# Data & output mount points
 RUN mkdir -p /data /output
 
+# Không hardcode entrypoint → Argo gọi script nào cũng được
 ENTRYPOINT ["bash"]
