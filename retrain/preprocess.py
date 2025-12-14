@@ -26,7 +26,7 @@ def main():
         raise RuntimeError("Missing Label column")
 
     # Ensure numeric label
-    y = df["Label"]
+    y = df["Label"].astype(str)
     X = df.drop(columns=["Label"])
 
     print("[INFO] Class distribution BEFORE SMOTE:")
@@ -36,7 +36,8 @@ def main():
     smote = SMOTE(random_state=args.seed)
     X_res, y_res = smote.fit_resample(X, y)
 
-    out = pd.concat([X_res, y_res], axis=1)
+    out = pd.concat([X_res, y_res.rename("Label")], axis=1)
+
     out.to_csv(args.output, index=False)
 
     print("=" * 80)
