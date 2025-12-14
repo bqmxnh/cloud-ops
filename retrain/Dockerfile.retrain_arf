@@ -2,11 +2,13 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY retrain_arf.py /app/retrain_arf.py
-COPY requirements.retrain_arf.txt /app/requirements.txt
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.retrain_arf.txt .
+RUN pip install --no-cache-dir -r requirements.retrain_arf.txt
 
-RUN mkdir -p /data && mkdir -p /output
+COPY retrain/ /app/retrain/
 
-ENTRYPOINT ["python", "/app/retrain_arf.py"]
+RUN mkdir -p /data /output
+
+ENTRYPOINT ["bash"]
