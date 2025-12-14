@@ -38,6 +38,23 @@ spec:
             - name: drift_ts
               value: "{{tasks.check-drift.outputs.parameters.drift_ts}}"
 
+      - name: pull-base
+        dependencies: [fetch-drift]
+        template: pull-base-dvc
+
+      - name: merge-data
+        dependencies: [pull-base]
+        template: merge-data
+        arguments:
+          artifacts:
+            - name: drift_raw
+              from: "{{tasks.fetch-drift.outputs.artifacts.drift_raw}}"
+            - name: base
+              from: "{{tasks.pull-base.outputs.artifacts.base}}"
+
+
+      
+
 
       # # 3️⃣ MERGE BASE + DRIFT (7:3)
       # - name: merge-data
@@ -87,6 +104,9 @@ spec:
             path: /tmp/drift_ts
 
 
+            
+
+
   # ============================================================
   # TEMPLATE: FETCH DRIFT
   # ============================================================
@@ -100,12 +120,52 @@ spec:
       args:
         - |
           echo "[STEP] FETCH DRIFT"
-          echo "Using drift_ts={{inputs.parameters.drift_ts}}"
-
-          python /app/retrain/fetch_drift.py \
+          python /app/retrain/fetch_prod.py \
             --drift-ts {{inputs.parameters.drift_ts}} \
             --output /data/drift_raw.csv
+    outputs:
+      artifacts:
+        - name: drift_raw
+          path: /data/drift_raw.csv
 
+  
+  - name: pull-base-dvc
+    container:
+      image: bqmxnh/cloud-ops-retrain:latest
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "[STEP] DVC PULL BASE DATA"
+
+          cd /app
+          dvc pull datasets/base/base.csv
+
+          ls -lh datasets/base/base.csv
+    outputs:
+      artifacts:
+        - name: base
+          path: /app/datasets/base/base.csv
+
+  - name: merge-data
+    inputs:
+      artifacts:
+        - name: drift_raw
+          path: /data/drift_raw.csv
+        - name: base
+          path: /app/datasets/base/base.csv
+    container:
+      image: bqmxnh/cloud-ops-retrain:latest
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "[STEP] MERGE BASE + DRIFT (7:3, streaming)"
+
+          python /app/retrain/merge_data.py \
+            --drift /data/drift_raw.csv \
+            --base /app/datasets/base/base.csv \
+            --output /data/drift_merged.csv
+
+    
 
   # # ============================================================
   # # TEMPLATE: MERGE BASE + DRIFT
