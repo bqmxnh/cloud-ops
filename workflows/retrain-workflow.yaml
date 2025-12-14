@@ -55,6 +55,11 @@ spec:
       - name: preprocess
         dependencies: [merge-data]
         template: preprocess
+        arguments:
+          artifacts:
+            - name: merged
+              from: "{{tasks.merge-data.outputs.artifacts.merged}}"
+
 
 
 
@@ -182,9 +187,17 @@ spec:
             --drift /data/drift_raw.csv \
             --base /app/datasets/base/base.csv \
             --output /data/drift_merged.csv
+    outputs:
+      artifacts:
+        - name: merged
+          path: /data/drift_merged.csv
+
 
   - name: preprocess
-    dependencies: [merge-data]
+    inputs:
+      artifacts:
+        - name: merged
+          path: /data/drift_merged.csv
     container:
       image: bqmxnh/cloud-ops-retrain:latest
       command: ["bash", "-c"]
@@ -198,36 +211,6 @@ spec:
 
 
 
-    
-
-  # # ============================================================
-  # # TEMPLATE: MERGE BASE + DRIFT
-  # # ============================================================
-  # - name: merge-data
-  #   container:
-  #     image: bqmxnh/cloud-ops-retrain:latest
-  #     command: ["bash", "-c"]
-  #     args:
-  #       - |
-  #         echo "[STEP] MERGE DATA (7:3)"
-  #         python retrain/merge_data.py \
-  #           --drift /data/drift_window.csv \
-  #           --base /data/base.csv \
-  #           --output /data/drift.csv
-
-  # # ============================================================
-  # # TEMPLATE: PREPROCESS + SMOTE
-  # # ============================================================
-  # - name: preprocess
-  #   container:
-  #     image: bqmxnh/cloud-ops-retrain:latest
-  #     command: ["bash", "-c"]
-  #     args:
-  #       - |
-  #         echo "[STEP] PREPROCESS + SMOTE"
-  #         python retrain/preprocess.py \
-  #           --input /data/drift.csv \
-  #           --output /data/train_smote.csv
 
   # # ============================================================
   # # TEMPLATE: RETRAIN + HOLD-OUT EVALUATION

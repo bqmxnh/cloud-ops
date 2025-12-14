@@ -26,7 +26,7 @@ def main():
         raise RuntimeError("Missing Label column")
 
     # Ensure numeric label
-    y = df["Label"].astype(int)
+    y = df["Label"].astype(str)
     X = df.drop(columns=["Label"])
 
     print("[INFO] Class distribution BEFORE SMOTE:")
