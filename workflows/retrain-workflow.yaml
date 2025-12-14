@@ -26,15 +26,18 @@ spec:
     dag:
       tasks:
 
-      # CHECK DRIFT
       - name: check-drift
         template: check-drift
 
-      # FETCH DRIFT (only if drift detected)
       - name: fetch-drift
         dependencies: [check-drift]
-        when: "{{tasks.check-drift.exitCode}} == 0"
+        when: "{{tasks.check-drift.outputs.parameters.drift}} == true"
         template: fetch-drift
+        arguments:
+          parameters:
+            - name: drift_ts
+              value: "{{tasks.check-drift.outputs.parameters.drift_ts}}"
+
 
       # # 3️⃣ MERGE BASE + DRIFT (7:3)
       # - name: merge-data
@@ -61,32 +64,48 @@ spec:
       args:
         - |
           echo "[STEP] CHECK DRIFT"
-          python retrain/check_drift.py \
+          python /app/retrain/check_drift.py \
             --hours {{workflow.parameters.hours}} \
             --delta {{workflow.parameters.delta}} \
             --window {{workflow.parameters.window}} \
-            --min-samples {{workflow.parameters.min_samples}}
+            --min-samples {{workflow.parameters.min_samples}} \
+            | tee /tmp/check.log
+
+          if grep -q "DRIFT=true" /tmp/check.log; then
+            echo "true" > /tmp/drift
+            grep FIRST_DRIFT_TS /tmp/check.log | cut -d= -f2 > /tmp/drift_ts
+          else
+            echo "false" > /tmp/drift
+          fi
+    outputs:
+      parameters:
+        - name: drift
+          valueFrom:
+            path: /tmp/drift
+        - name: drift_ts
+          valueFrom:
+            path: /tmp/drift_ts
+
 
   # ============================================================
   # TEMPLATE: FETCH DRIFT
   # ============================================================
   - name: fetch-drift
+    inputs:
+      parameters:
+        - name: drift_ts
     container:
       image: bqmxnh/cloud-ops-retrain:latest
       command: ["bash", "-c"]
       args:
         - |
           echo "[STEP] FETCH DRIFT"
-          DRIFT_TS=$(python retrain/check_drift.py \
-            --hours {{workflow.parameters.hours}} \
-            --delta {{workflow.parameters.delta}} \
-            --window {{workflow.parameters.window}} \
-            --min-samples {{workflow.parameters.min_samples}} \
-            | grep FIRST_DRIFT_TS | cut -d= -f2)
+          echo "Using drift_ts={{inputs.parameters.drift_ts}}"
 
-          python retrain/fetch_prod.py \
-            --drift-ts $DRIFT_TS \
-            --output /data/drift_window.csv
+          python /app/retrain/fetch_drift.py \
+            --drift-ts {{inputs.parameters.drift_ts}} \
+            --output /data/drift_raw.csv
+
 
   # # ============================================================
   # # TEMPLATE: MERGE BASE + DRIFT
