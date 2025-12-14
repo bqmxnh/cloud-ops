@@ -2,22 +2,18 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# System deps
 RUN apt-get update && \
     apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
-# Python deps + DVC
 COPY retrain/requirements.retrain_arf.txt .
-RUN pip install --no-cache-dir \
-    -r requirements.retrain_arf.txt \
-    dvc[s3]
+RUN pip install --no-cache-dir -r requirements.retrain_arf.txt
 
-# Copy code & datasets (TỪ ROOT CONTEXT)
+RUN pip install --no-cache-dir dvc
+
 COPY retrain/ /app/retrain/
 COPY datasets/ /app/datasets/
 
-# Runtime dirs
 RUN mkdir -p /data /output
 
 ENTRYPOINT ["bash"]
