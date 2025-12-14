@@ -52,6 +52,11 @@ spec:
             - name: base
               from: "{{tasks.pull-base.outputs.artifacts.base}}"
 
+      - name: preprocess
+        dependencies: [merge-data]
+        template: preprocess
+
+
 
       
 
@@ -135,12 +140,25 @@ spec:
       command: ["bash", "-c"]
       args:
         - |
-          echo "[STEP] DVC PULL BASE DATA"
+          echo "[STEP] DVC PULL BASE DATA (NO-SCM)"
 
           cd /app
-          dvc pull datasets/base/base.csv
 
-          ls -lh datasets/base/base.csv
+          # Init DVC (no git)
+          dvc init --no-scm
+
+          # ADD REMOTE (BẮT BUỘC)
+          dvc remote add -f trainingstore s3://qmuit-training-data-store
+
+          # OPTIONAL: set default remote
+          dvc remote default trainingstore
+
+          # PULL FILE TRACKED
+          dvc pull datasets/base/base.csv.dvc
+
+          ls -lh datasets/base/
+
+
     outputs:
       artifacts:
         - name: base
@@ -164,6 +182,21 @@ spec:
             --drift /data/drift_raw.csv \
             --base /app/datasets/base/base.csv \
             --output /data/drift_merged.csv
+
+  - name: preprocess
+    dependencies: [merge-data]
+    container:
+      image: bqmxnh/cloud-ops-retrain:latest
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "[STEP] PREPROCESS (SMOTE ONLY)"
+
+          python /app/retrain/preprocess.py \
+            --input /data/drift_merged.csv \
+            --output /data/train_smote.csv
+
+
 
     
 
