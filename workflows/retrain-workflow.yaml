@@ -140,29 +140,19 @@ spec:
       command: ["bash", "-c"]
       args:
         - |
-          echo "[STEP] DVC PULL BASE DATA (NO-SCM)"
+          echo "[STEP] DVC PULL BASE DATA"
 
           cd /app
 
-          # Init DVC (no git)
-          dvc init --no-scm
-
-          # ADD REMOTE (BẮT BUỘC)
-          dvc remote add -f trainingstore s3://qmuit-training-data-store
-
-          # OPTIONAL: set default remote
-          dvc remote default trainingstore
-
-          # PULL FILE TRACKED
+          # chỉ pull file .dvc đã được commit
           dvc pull datasets/base/base.csv.dvc
 
           ls -lh datasets/base/
-
-
     outputs:
       artifacts:
         - name: base
           path: /app/datasets/base/base.csv
+
 
   - name: merge-data
     inputs:
