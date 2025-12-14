@@ -6,9 +6,14 @@ RUN apt-get update && \
     apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
+# Python deps
 COPY retrain/requirements.retrain_arf.txt .
-RUN pip install --no-cache-dir -r requirements.retrain_arf.txt dvc[s3]
+RUN pip install --no-cache-dir -r requirements.retrain_arf.txt
 
+# DVC core
+RUN pip install --no-cache-dir dvc
+
+# === COPY SOURCE + DVC METADATA (QUAN TRỌNG) ===
 COPY retrain/ /app/retrain/
 COPY datasets/base/base.csv.dvc /app/datasets/base/base.csv.dvc
 
