@@ -60,6 +60,17 @@ spec:
             - name: merged
               from: "{{tasks.merge-data.outputs.artifacts.merged}}"
 
+      - name: retrain
+        dependencies: [preprocess]
+        template: retrain
+        arguments:
+          artifacts:
+            - name: train
+              from: "{{tasks.preprocess.outputs.artifacts.train}}"
+            - name: test
+              from: "{{tasks.preprocess.outputs.artifacts.test}}"
+
+
 
 
 
@@ -203,11 +214,46 @@ spec:
       command: ["bash", "-c"]
       args:
         - |
-          echo "[STEP] PREPROCESS (SMOTE ONLY)"
+          echo "[STEP] PREPROCESS (SMOTE + 80/20)"
 
           python /app/retrain/preprocess.py \
             --input /data/drift_merged.csv \
-            --output /data/train_smote.csv
+            --train-out /data/train_smote.csv \
+            --test-out /data/test_holdout.csv
+    outputs:
+      artifacts:
+        - name: train
+          path: /data/train_smote.csv
+        - name: test
+          path: /data/test_holdout.csv
+
+
+  - name: retrain
+    inputs:
+      artifacts:
+        - name: train
+          path: /data/train_smote.csv
+        - name: test
+          path: /data/test_holdout.csv
+    container:
+      image: bqmxnh/cloud-ops-retrain:latest
+      resources:
+        requests:
+          memory: "4Gi"
+          cpu: "1"
+        limits:
+          memory: "8Gi"
+          cpu: "2"
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "[STEP] RETRAIN + HOLD-OUT EVALUATION"
+
+          python /app/retrain/retrain_arf.py \
+            --train /data/train_smote.csv \
+            --test /data/test_holdout.csv \
+            --add-ratio 0.4
+
 
 
 
