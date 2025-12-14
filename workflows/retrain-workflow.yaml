@@ -6,6 +6,17 @@ spec:
   entrypoint: main
   serviceAccountName: argo-workflows-workflow-controller
 
+  arguments:
+    parameters:
+      - name: hours
+        value: "24"
+      - name: delta
+        value: "0.002"
+      - name: window
+        value: "30"
+      - name: min_samples
+        value: "100"
+
   templates:
 
   # ============================================================
@@ -15,76 +26,112 @@ spec:
     dag:
       tasks:
 
-      # Step 1 — Download all required datasets from S3
-      - name: download-data
-        template: s3-download
+      # CHECK DRIFT
+      - name: check-drift
+        template: check-drift
 
-      # Step 2 — Run retraining script using retrain_arf.py
-      - name: retrain
-        dependencies: [download-data]
-        template: retrain-arf
-        arguments:
-          artifacts:
-            - name: data
-              from: "{{tasks.download-data.outputs.artifacts.data}}"
+      # FETCH DRIFT (only if drift detected)
+      - name: fetch-drift
+        dependencies: [check-drift]
+        when: "{{tasks.check-drift.exitCode}} == 0"
+        template: fetch-drift
+
+      # # 3️⃣ MERGE BASE + DRIFT (7:3)
+      # - name: merge-data
+      #   dependencies: [fetch-drift]
+      #   template: merge-data
+
+      # # 4️⃣ PREPROCESS + SMOTE
+      # - name: preprocess
+      #   dependencies: [merge-data]
+      #   template: preprocess
+
+      # # 5️⃣ RETRAIN + EVALUATE (hold-out 80/20)
+      # - name: retrain
+      #   dependencies: [preprocess]
+      #   template: retrain
 
   # ============================================================
-  # TEMPLATE 1: S3 Download step
+  # TEMPLATE: CHECK DRIFT
   # ============================================================
-  - name: s3-download
+  - name: check-drift
     container:
-      image: amazon/aws-cli:2.13.7
+      image: bqmxnh/cloud-ops-retrain:latest
       command: ["bash", "-c"]
       args:
         - |
-          mkdir -p /data
-          
-          echo "Downloading Base..."
-          aws s3 cp s3://qmuit-training-data-store/base/base.csv /data/base.csv
-
-          echo "Downloading Drift..."
-          aws s3 cp s3://qmuit-training-data-store/drift/drift.csv /data/drift.csv
-
-          echo "Downloading Test 1..."
-          aws s3 cp s3://qmuit-training-data-store/test/test1.csv /data/test1.csv
-
-          echo "Downloading Test 2..."
-          aws s3 cp s3://qmuit-training-data-store/test/test2.csv /data/test2.csv
-
-          echo "All datasets downloaded into /data"
-    outputs:
-      artifacts:
-        - name: data
-          path: /data
+          echo "[STEP] CHECK DRIFT"
+          python retrain/check_drift.py \
+            --hours {{workflow.parameters.hours}} \
+            --delta {{workflow.parameters.delta}} \
+            --window {{workflow.parameters.window}} \
+            --min-samples {{workflow.parameters.min_samples}}
 
   # ============================================================
-  # TEMPLATE 2: Retrain ARF
+  # TEMPLATE: FETCH DRIFT
   # ============================================================
-  - name: retrain-arf
-    inputs:
-      artifacts:
-        - name: data
-          path: /data
+  - name: fetch-drift
     container:
       image: bqmxnh/cloud-ops-retrain:latest
-      resources:
-        requests:
-          memory: "2Gi"
-          cpu: "500m"
-        limits:
-          memory: "4Gi"
-          cpu: "1"
-      env:
-        - name: MLFLOW_TRACKING_URI
-          value: "https://mlflow.qmuit.id.vn"
-        - name: MODEL_NAME
-          value: "ARF Baseline Model"
-        - name: MODEL_STAGE
-          value: "Production"
       command: ["bash", "-c"]
       args:
-      - |
-        echo "Starting ARF Incremental Retraining..."
-        python retrain_arf.py
-        echo "Retraining Completed."
+        - |
+          echo "[STEP] FETCH DRIFT"
+          DRIFT_TS=$(python retrain/check_drift.py \
+            --hours {{workflow.parameters.hours}} \
+            --delta {{workflow.parameters.delta}} \
+            --window {{workflow.parameters.window}} \
+            --min-samples {{workflow.parameters.min_samples}} \
+            | grep FIRST_DRIFT_TS | cut -d= -f2)
 
+          python retrain/fetch_prod.py \
+            --drift-ts $DRIFT_TS \
+            --output /data/drift_window.csv
+
+  # # ============================================================
+  # # TEMPLATE: MERGE BASE + DRIFT
+  # # ============================================================
+  # - name: merge-data
+  #   container:
+  #     image: bqmxnh/cloud-ops-retrain:latest
+  #     command: ["bash", "-c"]
+  #     args:
+  #       - |
+  #         echo "[STEP] MERGE DATA (7:3)"
+  #         python retrain/merge_data.py \
+  #           --drift /data/drift_window.csv \
+  #           --base /data/base.csv \
+  #           --output /data/drift.csv
+
+  # # ============================================================
+  # # TEMPLATE: PREPROCESS + SMOTE
+  # # ============================================================
+  # - name: preprocess
+  #   container:
+  #     image: bqmxnh/cloud-ops-retrain:latest
+  #     command: ["bash", "-c"]
+  #     args:
+  #       - |
+  #         echo "[STEP] PREPROCESS + SMOTE"
+  #         python retrain/preprocess.py \
+  #           --input /data/drift.csv \
+  #           --output /data/train_smote.csv
+
+  # # ============================================================
+  # # TEMPLATE: RETRAIN + HOLD-OUT EVALUATION
+  # # ============================================================
+  # - name: retrain
+  #   container:
+  #     image: bqmxnh/cloud-ops-retrain:latest
+  #     resources:
+  #       requests:
+  #         memory: "4Gi"
+  #         cpu: "1"
+  #       limits:
+  #         memory: "8Gi"
+  #         cpu: "2"
+  #     command: ["bash", "-c"]
+  #     args:
+  #       - |
+  #         echo "[STEP] RETRAIN + EVALUATE (80/20 HOLD-OUT)"
+  #         python retrain/retrain_arf.py
