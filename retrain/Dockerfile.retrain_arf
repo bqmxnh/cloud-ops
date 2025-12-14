@@ -7,19 +7,17 @@ RUN apt-get update && \
     apt-get install -y git && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements.retrain_arf.txt .
-
-# Install python deps (ADD dvc[s3])
+# Python deps + DVC
+COPY retrain/requirements.retrain_arf.txt .
 RUN pip install --no-cache-dir \
     -r requirements.retrain_arf.txt \
     dvc[s3]
 
-# Copy source code
+# Copy code & datasets (TỪ ROOT CONTEXT)
 COPY retrain/ /app/retrain/
 COPY datasets/ /app/datasets/
 
-# Create runtime dirs
+# Runtime dirs
 RUN mkdir -p /data /output
 
 ENTRYPOINT ["bash"]
