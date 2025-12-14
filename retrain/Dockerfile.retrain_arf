@@ -10,10 +10,11 @@ RUN apt-get update && \
 COPY retrain/requirements.retrain_arf.txt .
 RUN pip install --no-cache-dir -r requirements.retrain_arf.txt
 
-# DVC core
-RUN pip install --no-cache-dir dvc
+RUN pip install --no-cache-dir \
+    dvc \
+    dvc-s3
 
-# === COPY SOURCE + DVC METADATA (QUAN TRỌNG) ===
+# Copy code + dvc metadata file
 COPY retrain/ /app/retrain/
 COPY datasets/base/base.csv.dvc /app/datasets/base/base.csv.dvc
 
