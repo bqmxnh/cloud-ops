@@ -28,7 +28,7 @@ jobs:
         run: |
           docker build -f retrain/Dockerfile.retrain_arf \
                  -t bqmxnh/cloud-ops-retrain:${{ steps.vars.outputs.tag }} \
-                 -t bqmxnh/cloud-ops-retrain:latest retrain
+                 -t bqmxnh/cloud-ops-retrain:latest .
 
       - name: Push retrain images
         run: |
