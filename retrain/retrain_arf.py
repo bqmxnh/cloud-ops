@@ -198,5 +198,86 @@ def main():
 
     print("\n[OK] Retrained model artifacts saved")
 
+    # ============================================================
+    # MLFLOW LOG + REGISTER
+    # ============================================================
+    print("\n[MLFLOW] Logging retrained model...")
+
+    with mlflow.start_run(run_name="arf-incremental-retrain") as run:
+        # -------------------------------
+        # LOG METRICS
+        # -------------------------------
+        mlflow.log_metric("f1", f1.get())
+        mlflow.log_metric("accuracy", acc.get())
+        mlflow.log_metric("precision", prec.get())
+        mlflow.log_metric("recall", rec.get())
+        mlflow.log_metric("kappa", kappa.get())
+
+        # -------------------------------
+        # LOG PARAMS
+        # -------------------------------
+        mlflow.log_param("add_ratio", args.add_ratio)
+        mlflow.log_param("n_trees_before", num_old)
+        mlflow.log_param("n_trees_after", len(model.models))
+        mlflow.log_param("drift_confidence", BEST_PARAMS["drift_confidence"])
+        mlflow.log_param("retrain_type", "incremental_arf")
+        mlflow.log_param("source_stage", "Production")
+
+        # -------------------------------
+        # LOG ARTIFACTS
+        # -------------------------------
+        mlflow.log_artifact("model.pkl")
+        mlflow.log_artifact("scaler.pkl")
+        mlflow.log_artifact("label_encoder.pkl")
+        mlflow.log_artifact("feature_order.pkl")
+
+        run_id = run.info.run_id
+        print(f"[MLFLOW] Run ID: {run_id}")
+
+    # ============================================================
+    # DECISION: PROMOTE TO STAGING?
+    # ============================================================
+    F1_THRESHOLD = 0.90
+    KAPPA_THRESHOLD = 0.90
+
+    PROMOTE = (
+        f1.get() >= F1_THRESHOLD and
+        kappa.get() >= KAPPA_THRESHOLD
+    )
+
+    print(f"[DECISION] Promote to STAGING: {PROMOTE}")
+
+    if PROMOTE:
+        client = mlflow.tracking.MlflowClient()
+
+        model_uri = f"runs:/{run_id}"
+
+        print("[MLFLOW] Registering model to Registry...")
+        result = client.create_model_version(
+            name=MODEL_NAME,
+            source=model_uri,
+            run_id=run_id
+        )
+
+        version = result.version
+        print(f"[MLFLOW] Created model version: {version}")
+
+        print("[MLFLOW] Transitioning model to STAGING...")
+        client.transition_model_version_stage(
+            name=MODEL_NAME,
+            version=version,
+            stage="Staging",
+            archive_existing_versions=True
+        )
+
+        print(f"[SUCCESS] Model version {version} promoted to STAGING 🚀")
+
+    else:
+        print(
+            "[SKIP] Model did NOT meet promotion criteria → "
+            "kept for analysis only"
+        )
+
+
 if __name__ == "__main__":
     main()
