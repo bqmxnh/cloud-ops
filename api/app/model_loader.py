@@ -7,6 +7,7 @@ import mlflow
 from pathlib import Path
 from mlflow.tracking import MlflowClient
 import threading
+from app.metrics import MODEL_RELOAD_COUNT
 
 from app import globals as G
 from app.websocket import broadcast
@@ -94,6 +95,7 @@ def init_model():
 
                 G.current_model_version = new_version
                 G.model_reload_count += 1
+                MODEL_RELOAD_COUNT.inc()
 
                 print(f"[MODEL] LOADED from MLflow (v{new_version})")
                 return

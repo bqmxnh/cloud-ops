@@ -25,10 +25,7 @@ def metrics():
     # Update model version before exporting
     if G.current_model_version is not None:
         MODEL_VERSION.set(G.current_model_version)
-
-    # Reload count đã được tăng từ model_loader
-    MODEL_RELOAD_COUNT.inc(0)  
-
+        
     return PlainTextResponse(generate_latest(), media_type="text/plain")
 
 
