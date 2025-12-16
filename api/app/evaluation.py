@@ -8,6 +8,26 @@ from app import globals as G
 router = APIRouter()
 
 
+def normalize_pred_label(y_pred, encoder):
+    """
+    Normalize model prediction to STRING label.
+    Supports:
+    - int
+    - float / numpy scalar
+    - string
+    """
+    # Case 1: model trả STRING (River chuẩn)
+    if isinstance(y_pred, str):
+        return y_pred.upper()
+
+    # Case 2: model trả số (int / float)
+    try:
+        y_int = int(y_pred)        # 0.0 -> 0
+        return encoder.inverse_transform([y_int])[0]
+    except Exception:
+        return None
+
+
 @router.post("")
 async def evaluate(file: UploadFile = File(...)):
     """
@@ -32,7 +52,7 @@ async def evaluate(file: UploadFile = File(...)):
         return {"error": "CSV must contain Label column"}
 
     # ======================================================
-    # 2. INIT METRICS
+    # 2. INIT METRICS (STRING-BASED)
     # ======================================================
     metric_acc    = metrics.Accuracy()
     metric_prec   = metrics.Precision()
@@ -48,12 +68,8 @@ async def evaluate(file: UploadFile = File(...)):
     # ======================================================
     for _, row in df.iterrows():
 
-        # ----- TRUE LABEL -----
+        # ----- TRUE LABEL (STRING) -----
         y_true_label = str(row[label_col]).upper()
-        try:
-            y_true = int(G.encoder.transform([y_true_label])[0])
-        except Exception:
-            continue
 
         # ----- FEATURES -----
         try:
@@ -63,43 +79,40 @@ async def evaluate(file: UploadFile = File(...)):
             continue
 
         x_scaled = G.scaler.transform_one(x)
-        y_pred = G.model.predict_one(x_scaled)
+        y_pred_raw = G.model.predict_one(x_scaled)
 
-        if y_pred is None:
+        if y_pred_raw is None:
             continue
 
-        # ----- UPDATE METRICS -----
-        metric_acc.update(y_true, y_pred)
-        metric_prec.update(y_true, y_pred)
-        metric_rec.update(y_true, y_pred)
-        metric_f1.update(y_true, y_pred)
-        metric_kappa.update(y_true, y_pred)
+        # ----- NORMALIZE PRED LABEL -----
+        y_pred_label = normalize_pred_label(y_pred_raw, G.encoder)
+        if y_pred_label is None:
+            continue
+
+        # ----- UPDATE METRICS (STRING–STRING) -----
+        metric_acc.update(y_true_label, y_pred_label)
+        metric_prec.update(y_true_label, y_pred_label)
+        metric_rec.update(y_true_label, y_pred_label)
+        metric_f1.update(y_true_label, y_pred_label)
+        metric_kappa.update(y_true_label, y_pred_label)
+        metric_cm.update(y_true_label, y_pred_label)
+
+        # ----- DEBUG LOG (GIỮ ĐỂ SO SÁNH MODEL CŨ / MỚI) -----
         print(
             "[DEBUG]",
-            "type(y_pred) =", type(y_pred),
-            "| value =", y_pred
+            "raw_pred =", y_pred_raw,
+            "| type =", type(y_pred_raw),
+            "| normalized =", y_pred_label
         )
-
-
-        y_true_str = G.encoder.inverse_transform([y_true])[0]
-        y_pred_str = G.encoder.inverse_transform([y_pred])[0]
-        metric_cm.update(y_true_str, y_pred_str)
 
         rows_used += 1
 
     # ======================================================
-    # 4. FORMAT CONFUSION MATRIX (RIVER OFFICIAL API)
+    # 4. FORMAT CONFUSION MATRIX
     # ======================================================
-    labels = list(G.encoder.classes_)
+    labels = sorted(metric_cm.labels)
 
-    cm = {t: {p: 0 for p in labels} for t in labels}
-
-    for t in labels:
-        for p in labels:
-            try:
-                cm[t][p] = int(metric_cm[t][p])
-            except KeyError:
-                cm[t][p] = 0
+    cm = {t: {p: int(metric_cm[t][p]) for p in labels} for t in labels}
 
     # ======================================================
     # 5. RETURN RESULT
