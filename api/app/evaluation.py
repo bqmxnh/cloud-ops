@@ -16,30 +16,31 @@ async def evaluate(file: UploadFile = File(...)):
     """
 
     # ======================================================
+    # 0. SAFETY CHECK
+    # ======================================================
+    if G.model is None or G.scaler is None or G.encoder is None:
+        return {"error": "Model not loaded"}
+
+    # ======================================================
     # 1. LOAD CSV
     # ======================================================
     contents = await file.read()
     df = pd.read_csv(io.BytesIO(contents))
 
-    # Tìm cột label (case-insensitive)
-    label_col = None
-    for col in df.columns:
-        if col.lower() == "label":
-            label_col = col
-            break
-
+    # find label column (case-insensitive)
+    label_col = next((c for c in df.columns if c.lower() == "label"), None)
     if label_col is None:
         return {"error": "CSV must contain Label column"}
 
     # ======================================================
     # 2. INIT METRICS
     # ======================================================
-    metric_acc = metrics.Accuracy()
-    metric_prec = metrics.Precision()
-    metric_rec = metrics.Recall()
-    metric_f1 = metrics.F1()
-    metric_kappa = metrics.CohenKappa()
-    metric_cm = metrics.ConfusionMatrix()
+    metric_acc    = metrics.Accuracy()
+    metric_prec   = metrics.Precision()
+    metric_rec    = metrics.Recall()
+    metric_f1     = metrics.F1()
+    metric_kappa  = metrics.CohenKappa()
+    metric_cm     = metrics.ConfusionMatrix()
 
     rows_used = 0
 
@@ -47,24 +48,26 @@ async def evaluate(file: UploadFile = File(...)):
     # 3. EVALUATION LOOP (ONLINE STYLE)
     # ======================================================
     for _, row in df.iterrows():
+
         # ----- TRUE LABEL -----
         y_true_label = str(row[label_col]).upper()
-
         try:
             y_true = int(G.encoder.transform([y_true_label])[0])
         except Exception:
-            continue  # skip unknown label
+            continue  # unknown label → skip
 
         # ----- FEATURES -----
         try:
             x_raw = row.drop(label_col).to_dict()
-            # đảm bảo đúng thứ tự feature đã train
             x = {k: float(x_raw[k]) for k in G.FEATURE_ORDER}
         except Exception:
-            continue  # skip row lỗi feature
+            continue  # malformed row → skip
 
         x_scaled = G.scaler.transform_one(x)
         y_pred = G.model.predict_one(x_scaled)
+
+        if y_pred is None:
+            continue
 
         # ----- UPDATE METRICS -----
         metric_acc.update(y_true, y_pred)
@@ -77,18 +80,18 @@ async def evaluate(file: UploadFile = File(...)):
         rows_used += 1
 
     # ======================================================
-    # 4. FORMAT CONFUSION MATRIX
+    # 4. FORMAT CONFUSION MATRIX (RIVER OFFICIAL API)
     # ======================================================
-    # river ConfusionMatrix lưu dạng dict[(y_true, y_pred)] = count
-    cm_raw = metric_cm.confusion_matrix
-
     labels = list(G.encoder.classes_)
-    label_ids = list(range(len(labels)))
 
-    cm = {
-        labels[i]: {labels[j]: int(cm_raw.get((i, j), 0)) for j in label_ids}
-        for i in label_ids
-    }
+    cm = {t: {p: 0 for p in labels} for t in labels}
+
+    for t in labels:
+        for p in labels:
+            try:
+                cm[t][p] = int(metric_cm[t][p])
+            except KeyError:
+                cm[t][p] = 0
 
     # ======================================================
     # 5. RETURN RESULT
