@@ -74,6 +74,12 @@ async def evaluate(file: UploadFile = File(...)):
         metric_rec.update(y_true, y_pred)
         metric_f1.update(y_true, y_pred)
         metric_kappa.update(y_true, y_pred)
+        print(
+            "[DEBUG]",
+            "type(y_pred) =", type(y_pred),
+            "| value =", y_pred
+        )
+
 
         y_true_str = G.encoder.inverse_transform([y_true])[0]
         y_pred_str = G.encoder.inverse_transform([y_pred])[0]
