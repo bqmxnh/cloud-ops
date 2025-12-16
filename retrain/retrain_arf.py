@@ -13,9 +13,10 @@ import mlflow
 # ARGS
 # ============================================================
 def parse_args():
-    ap = argparse.ArgumentParser("Incremental Retrain ARF (Production → Staging)")
-    ap.add_argument("--train", required=True, help="train_smote.csv")
-    ap.add_argument("--test", required=True, help="test_holdout.csv")
+    ap = argparse.ArgumentParser("Incremental ARF Retrain")
+    ap.add_argument("--train", required=True)
+    ap.add_argument("--test-old", required=True)
+    ap.add_argument("--test-new", required=True)
     ap.add_argument("--add-ratio", type=float, default=0.4)
     ap.add_argument("--seed", type=int, default=42)
     return ap.parse_args()
@@ -75,15 +76,29 @@ def main():
     # LOAD DATA (ALREADY SPLIT + SMOTE)
     # --------------------------------------------------------
     df_train = pd.read_csv(args.train)
-    df_test = pd.read_csv(args.test)
+    df_old = pd.read_csv(args.test_old)
+    df_new = pd.read_csv(args.test_new)
 
-    df_train["Label"] = encoder.transform(df_train["Label"])
-    df_test["Label"] = encoder.transform(df_test["Label"])
+    for df in (df_train, df_old, df_new):
+        df["Label"] = encoder.transform(df["Label"])
 
     print(f"\n[SPLIT]")
     print(f"✔ Train: {len(df_train)}")
-    print(f"✔ Test : {len(df_test)}")
+    print(f"✔ Test Old: {len(df_old)}")
+    print(f"✔ Test New: {len(df_new)}")    
 
+    # ============================================================
+    # EVAL BEFORE RETRAIN (ADAPTATION BASELINE)
+    # ============================================================
+    print("\n[EVAL-BEFORE] Adaptation baseline (Production model)")
+
+    metrics_new_before = evaluate_dataset(
+        model_base, scaler, df_new, FEATURE_ORDER, "PRE-ADAPT / TEST_NEW"
+    )
+
+    F1_new_before = metrics_new_before["f1"]
+
+    # ============================================================
     # --------------------------------------------------------
     # ADD NEW TREES
     # --------------------------------------------------------
@@ -144,49 +159,70 @@ def main():
 
     print(f"\n[DONE] Training completed in {time.time() - t0:.2f}s")
 
-    # --------------------------------------------------------
-    # EVALUATION (HOLD-OUT TEST)
-    # --------------------------------------------------------
-    print("\n[EVAL] Evaluating on TEST set...")
+    # ============================================================
+    # EVALUATION HELPERS (ADDED)
+    # ============================================================
+    def evaluate_dataset(model, scaler, df, feature_order, name):
+        acc = metrics.Accuracy()
+        prec = metrics.Precision()
+        rec = metrics.Recall()
+        f1 = metrics.F1()
+        kappa = metrics.CohenKappa()
 
-    acc = metrics.Accuracy()
-    prec = metrics.Precision()
-    rec = metrics.Recall()
-    f1 = metrics.F1()
-    kappa = metrics.CohenKappa()
+        tp = tn = fp = fn = 0
 
-    tp = tn = fp = fn = 0
+        for _, row in df.iterrows():
+            x = {k: row[k] for k in feature_order}
+            y = row["Label"]
 
-    for _, row in df_test.iterrows():
-        x = {k: row[k] for k in FEATURE_ORDER}
-        y = row["Label"]
+            x_scaled = scaler.transform_one(x)
+            y_pred = model.predict_one(x_scaled)
 
-        x_scaled = scaler.transform_one(x)
-        y_pred = model.predict_one(x_scaled)
+            if y_pred is None:
+                continue
 
-        if y_pred is None:
-            continue
+            acc.update(y, y_pred)
+            prec.update(y, y_pred)
+            rec.update(y, y_pred)
+            f1.update(y, y_pred)
+            kappa.update(y, y_pred)
 
-        acc.update(y, y_pred)
-        prec.update(y, y_pred)
-        rec.update(y, y_pred)
-        f1.update(y, y_pred)
-        kappa.update(y, y_pred)
+            if y == 0 and y_pred == 0: tp += 1
+            elif y == 1 and y_pred == 1: tn += 1
+            elif y == 1 and y_pred == 0: fp += 1
+            elif y == 0 and y_pred == 1: fn += 1
 
-        if y == 0 and y_pred == 0: tp += 1
-        elif y == 1 and y_pred == 1: tn += 1
-        elif y == 1 and y_pred == 0: fp += 1
-        elif y == 0 and y_pred == 1: fn += 1
+        print(f"\n[{name}]")
+        print(f"F1-score        : {f1.get():.4f}")
+        print(f"Accuracy        : {acc.get():.4f}")
+        print(f"Precision       : {prec.get():.4f}")
+        print(f"Recall          : {rec.get():.4f}")
+        print(f"Cohen's Kappa   : {kappa.get():.4f}")
+        print("[CONFUSION MATRIX]")
+        print(f"TP: {tp} | FP: {fp}")
+        print(f"FN: {fn} | TN: {tn}")
 
-    print("\n[RESULTS]")
-    print(f"F1-score        : {f1.get():.4f}")
-    print(f"Accuracy        : {acc.get():.4f}")
-    print(f"Precision       : {prec.get():.4f}")
-    print(f"Recall          : {rec.get():.4f}")
-    print(f"Cohen's Kappa   : {kappa.get():.4f}")
-    print("\n[CONFUSION MATRIX]")
-    print(f"TP: {tp} | FP: {fp}")
-    print(f"FN: {fn} | TN: {tn}")
+        return {
+            "f1": f1.get(),
+            "accuracy": acc.get(),
+            "precision": prec.get(),
+            "recall": rec.get(),
+            "kappa": kappa.get(),
+        }
+    # ============================
+    # EVALUATION ON TEST SETS
+    # ============================
+   
+    print("\n[EVAL] Retention (OLD distribution)")
+    metrics_old = evaluate_dataset(
+        model, scaler, df_old, FEATURE_ORDER, "RETENTION / TEST_OLD"
+    )
+
+    print("\n[EVAL] Adaptation (NEW distribution)")
+    metrics_new = evaluate_dataset(
+        model, scaler, df_new, FEATURE_ORDER, "ADAPTATION / TEST_NEW"
+    )
+
 
     # --------------------------------------------------------
     # SAVE FOR MLFLOW STAGING
@@ -207,11 +243,12 @@ def main():
         # -------------------------------
         # LOG METRICS
         # -------------------------------
-        mlflow.log_metric("f1", f1.get())
-        mlflow.log_metric("accuracy", acc.get())
-        mlflow.log_metric("precision", prec.get())
-        mlflow.log_metric("recall", rec.get())
-        mlflow.log_metric("kappa", kappa.get())
+        mlflow.log_metric("retention_ratio", RETENTION)
+        mlflow.log_metric("forgetting", FORGETTING)
+        mlflow.log_metric("f1_new_before", F1_new_before)
+        mlflow.log_metric("f1_new_after", F1_new_after)
+        mlflow.log_metric("adaptation_gain", ADAPTATION_GAIN)
+
 
         # -------------------------------
         # LOG PARAMS
@@ -235,17 +272,48 @@ def main():
         print(f"[MLFLOW] Run ID: {run_id}")
 
     # ============================================================
-    # DECISION: PROMOTE TO STAGING?
-    # ============================================================
-    F1_THRESHOLD = 0.90
-    KAPPA_THRESHOLD = 0.90
+    # DECISION TO PROMOTE TO STAGING?
+
+    F1_new_after = metrics_new["f1"]
+    # Baseline performance before drift (Production)
+    F1_BASE = 0.9964
+
+    # Retention: performance trên dữ liệu cũ sau retrain
+    F1_retention = metrics_old["f1"]
+
+
+    # Retention ratio (theo literature)
+    RETENTION = F1_retention / F1_BASE
+
+    # Forgetting (absolute performance drop)
+    FORGETTING = F1_BASE - F1_retention
+
+    # Adaptation gain
+    ADAPTATION_GAIN = F1_new_after - F1_new_before
+
+
+    # ================================
+    # THRESHOLDS
+    # ================================
+    MIN_RETENTION_RATIO = 0.90      # giữ ≥ 90% kiến thức cũ
+    MAX_FORGETTING = 0.10           # cho phép quên ≤ 10%
+    MIN_ADAPTATION_GAIN = 0.05     # cải thiện ít nhất 5% so với baseline
 
     PROMOTE = (
-        f1.get() >= F1_THRESHOLD and
-        kappa.get() >= KAPPA_THRESHOLD
+        RETENTION >= MIN_RETENTION_RATIO and
+        ADAPTATION_GAIN >= MIN_ADAPTATION_GAIN and
+        FORGETTING <= MAX_FORGETTING
     )
 
-    print(f"[DECISION] Promote to STAGING: {PROMOTE}")
+
+    print(
+        "\n[DECISION-DRIFT-AWARE]\n"
+        f"  Retention   F1 = {RETENTION:.4f}\n"
+        f"  Adaptation  F1 = {ADAPTATION_GAIN:.4f}\n"
+        f"  Forgetting    = {FORGETTING:.4f}\n"
+        f"  => PROMOTE = {PROMOTE}"
+    )
+
 
     if PROMOTE:
         client = mlflow.tracking.MlflowClient()
@@ -271,12 +339,12 @@ def main():
         )
 
         print(f"[SUCCESS] Model version {version} promoted to STAGING 🚀")
-
     else:
         print(
-            "[SKIP] Model did NOT meet promotion criteria → "
-            "kept for analysis only"
+            "[SKIP] Model NOT promoted → "
+            "insufficient retention/adaptation or excessive forgetting"
         )
+
 
 
 if __name__ == "__main__":
