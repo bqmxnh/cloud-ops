@@ -7,3 +7,4 @@ pandas
 mlflow
 joblib
 prometheus_client
+python-multipart
