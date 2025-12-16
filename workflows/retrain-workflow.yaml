@@ -67,11 +67,8 @@ spec:
           artifacts:
             - name: train
               from: "{{tasks.preprocess.outputs.artifacts.train}}"
-            - name: test_old
-              from: "{{tasks.preprocess.outputs.artifacts.test_old}}"
-            - name: test_new
-              from: "{{tasks.preprocess.outputs.artifacts.test_new}}"
-
+            - name: test
+              from: "{{tasks.preprocess.outputs.artifacts.test}}"
 
 
 
@@ -217,33 +214,27 @@ spec:
       command: ["bash", "-c"]
       args:
         - |
-          echo "[STEP] PREPROCESS (TRAIN / TEST_OLD / TEST_NEW)"
+          echo "[STEP] PREPROCESS (SMOTE + 80/20)"
 
           python /app/retrain/preprocess.py \
             --input /data/drift_merged.csv \
-            --train-out /data/train.csv \
-            --test-old-out /data/test_old.csv \
-            --test-new-out /data/test_new.csv
+            --train-out /data/train_smote.csv \
+            --test-out /data/test_holdout.csv
     outputs:
       artifacts:
         - name: train
-          path: /data/train.csv
-        - name: test_old
-          path: /data/test_old.csv
-        - name: test_new
-          path: /data/test_new.csv
-
+          path: /data/train_smote.csv
+        - name: test
+          path: /data/test_holdout.csv
 
 
   - name: retrain
     inputs:
       artifacts:
         - name: train
-          path: /data/train.csv
-        - name: test_old
-          path: /data/test_old.csv
-        - name: test_new
-          path: /data/test_new.csv
+          path: /data/train_smote.csv
+        - name: test
+          path: /data/test_holdout.csv
     container:
       image: bqmxnh/cloud-ops-retrain:latest
       resources:
@@ -256,13 +247,32 @@ spec:
       command: ["bash", "-c"]
       args:
         - |
-          echo "[STEP] RETRAIN + RETENTION / ADAPTATION EVAL"
+          echo "[STEP] RETRAIN + HOLD-OUT EVALUATION"
 
           python /app/retrain/retrain_arf.py \
-            --train /data/train.csv \
-            --test-old /data/test_old.csv \
-            --test-new /data/test_new.csv \
+            --train /data/train_smote.csv \
+            --test /data/test_holdout.csv \
             --add-ratio 0.4
 
 
 
+
+
+  # # ============================================================
+  # # TEMPLATE: RETRAIN + HOLD-OUT EVALUATION
+  # # ============================================================
+  # - name: retrain
+  #   container:
+  #     image: bqmxnh/cloud-ops-retrain:latest
+  #     resources:
+  #       requests:
+  #         memory: "4Gi"
+  #         cpu: "1"
+  #       limits:
+  #         memory: "8Gi"
+  #         cpu: "2"
+  #     command: ["bash", "-c"]
+  #     args:
+  #       - |
+  #         echo "[STEP] RETRAIN + EVALUATE (80/20 HOLD-OUT)"
+  #         python retrain/retrain_arf.py

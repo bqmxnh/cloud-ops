@@ -13,10 +13,9 @@ import mlflow
 # ARGS
 # ============================================================
 def parse_args():
-    ap = argparse.ArgumentParser("Incremental ARF Retrain")
-    ap.add_argument("--train", required=True)
-    ap.add_argument("--test-old", required=True)
-    ap.add_argument("--test-new", required=True)
+    ap = argparse.ArgumentParser("Incremental Retrain ARF (Production → Staging)")
+    ap.add_argument("--train", required=True, help="train_smote.csv")
+    ap.add_argument("--test", required=True, help="test_holdout.csv")
     ap.add_argument("--add-ratio", type=float, default=0.4)
     ap.add_argument("--seed", type=int, default=42)
     return ap.parse_args()
@@ -53,98 +52,6 @@ def load_from_registry(model_name, stage):
     return mlflow.artifacts.download_artifacts(uri)
 
 # ============================================================
-# EVALUATION HELPER
-# ============================================================
-def evaluate_dataset(model, scaler, df, feature_order, encoder, name):
-    """
-    Evaluate model on a dataset with proper confusion matrix calculation.
-    ATTACK (class 0) is considered the POSITIVE class for intrusion detection.
-    """
-    acc = metrics.Accuracy()
-    prec = metrics.Precision()
-    rec = metrics.Recall()
-    f1 = metrics.F1()
-    kappa = metrics.CohenKappa()
-    
-    # Get ATTACK class index (should be 0)
-    ATTACK_CLASS = list(encoder.classes_).index('ATTACK')
-    
-    # Confusion matrix counters
-    tp = tn = fp = fn = 0
-
-    for _, row in df.iterrows():
-        x = {k: row[k] for k in feature_order}
-        y = row["Label"]
-
-        x_scaled = scaler.transform_one(x)
-        y_pred = model.predict_one(x_scaled)
-
-        if y_pred is None:
-            continue
-
-        # Update River metrics (automatically handle multi-class correctly)
-        acc.update(y, y_pred)
-        prec.update(y, y_pred)
-        rec.update(y, y_pred)
-        f1.update(y, y_pred)
-        kappa.update(y, y_pred)
-
-        # Confusion matrix with ATTACK as positive class
-        # TP: Correctly detected attack
-        # TN: Correctly identified benign
-        # FP: False alarm (benign predicted as attack)
-        # FN: Missed attack (attack predicted as benign)
-        
-        if y == ATTACK_CLASS and y_pred == ATTACK_CLASS:
-            tp += 1  # True Positive - Correctly detected attack
-        elif y != ATTACK_CLASS and y_pred != ATTACK_CLASS:
-            tn += 1  # True Negative - Correctly identified benign
-        elif y != ATTACK_CLASS and y_pred == ATTACK_CLASS:
-            fp += 1  # False Positive - False alarm
-        elif y == ATTACK_CLASS and y_pred != ATTACK_CLASS:
-            fn += 1  # False Negative - Missed attack
-
-    print(f"\n{'='*60}")
-    print(f"[{name}]")
-    print(f"{'='*60}")
-    print(f"F1-score        : {f1.get():.4f}")
-    print(f"Accuracy        : {acc.get():.4f}")
-    print(f"Precision       : {prec.get():.4f}")
-    print(f"Recall          : {rec.get():.4f}")
-    print(f"Cohen's Kappa   : {kappa.get():.4f}")
-    print(f"\n[CONFUSION MATRIX - ATTACK as Positive]")
-    print(f"                 Predicted")
-    print(f"              ATTACK  BENIGN")
-    print(f"Actual ATTACK   {tp:4d}    {fn:4d}   (TP/FN)")
-    print(f"       BENIGN   {fp:4d}    {tn:4d}   (FP/TN)")
-    print(f"{'='*60}\n")
-
-    return {
-        "f1": f1.get(),
-        "accuracy": acc.get(),
-        "precision": prec.get(),
-        "recall": rec.get(),
-        "kappa": kappa.get(),
-        "tp": tp,
-        "tn": tn,
-        "fp": fp,
-        "fn": fn
-    }
-
-# ============================================================
-# TREE CREATION
-# ============================================================
-def create_new_tree(params):
-    """Create new Hoeffding Tree with best params"""
-    return tree.HoeffdingTreeClassifier(
-        grace_period=params["grace_period"],
-        split_criterion=params["split_criterion"],
-        leaf_prediction=params["leaf_prediction"],
-        binary_split=params["binary_split"],
-        max_depth=params["max_depth"]
-    )
-
-# ============================================================
 # MAIN
 # ============================================================
 def main():
@@ -154,10 +61,6 @@ def main():
     # --------------------------------------------------------
     # LOAD MODEL + PREPROCESSORS (FROM PRODUCTION)
     # --------------------------------------------------------
-    print(f"\n{'='*60}")
-    print("[STEP 1] LOADING PRODUCTION MODEL")
-    print(f"{'='*60}")
-    
     artifact_dir = load_from_registry(MODEL_NAME, MODEL_STAGE)
 
     model_base = joblib.load(Path(artifact_dir) / "model.pkl")
@@ -167,59 +70,40 @@ def main():
 
     print(f"✔ Trees before retrain: {len(model_base.models)}")
     print(f"✔ Classes: {encoder.classes_}")
-    print(f"✔ Feature count: {len(FEATURE_ORDER)}")
 
     # --------------------------------------------------------
     # LOAD DATA (ALREADY SPLIT + SMOTE)
     # --------------------------------------------------------
-    print(f"\n{'='*60}")
-    print("[STEP 2] LOADING DATA")
-    print(f"{'='*60}")
-    
     df_train = pd.read_csv(args.train)
-    df_old = pd.read_csv(args.test_old)
-    df_new = pd.read_csv(args.test_new)
+    df_test = pd.read_csv(args.test)
 
-    # Encode labels
-    for df in (df_train, df_old, df_new):
-        df["Label"] = encoder.transform(df["Label"])
+    df_train["Label"] = encoder.transform(df_train["Label"])
+    df_test["Label"] = encoder.transform(df_test["Label"])
 
-    print(f"✔ Train set: {len(df_train)} samples")
-    print(f"✔ Test Old (BASE): {len(df_old)} samples")
-    print(f"✔ Test New (DRIFT): {len(df_new)} samples")
-    
-    # Check class distribution
-    print(f"\nClass distribution in train:")
-    print(df_train["Label"].value_counts().to_dict())
+    print(f"\n[SPLIT]")
+    print(f"✔ Train: {len(df_train)}")
+    print(f"✔ Test : {len(df_test)}")
 
-    # ============================================================
-    # EVAL BEFORE RETRAIN (BASELINE PERFORMANCE ON DRIFT)
-    # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 3] BASELINE EVALUATION (BEFORE RETRAIN)")
-    print(f"{'='*60}")
-
-    metrics_new_before = evaluate_dataset(
-        model_base, scaler, df_new, FEATURE_ORDER, encoder, 
-        "BASELINE / TEST_NEW (DRIFT DATA)"
-    )
-    F1_new_before = metrics_new_before["f1"]
-
-    # ============================================================
-    # ADD NEW TREES TO MODEL
-    # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 4] EXPANDING MODEL ARCHITECTURE")
-    print(f"{'='*60}")
-    
+    # --------------------------------------------------------
+    # ADD NEW TREES
+    # --------------------------------------------------------
     model = model_base
-    model._rng = random.Random(args.seed)
+    model._rng = random.Random()
 
     num_old = len(model.models)
     num_add = int(num_old * args.add_ratio)
 
-    print(f"✔ Adding {num_add} new trees ({int(args.add_ratio*100)}% of existing)")
-    print(f"✔ Total trees after expansion: {num_old + num_add}")
+    print(f"\n[MODEL] Adding {num_add} new trees ({int(args.add_ratio*100)}%)")
+
+    def create_new_tree(params):
+        """Create new Hoeffding Tree with best params"""
+        return tree.HoeffdingTreeClassifier(
+            grace_period=params["grace_period"],
+            split_criterion=params["split_criterion"],
+            leaf_prediction=params["leaf_prediction"],
+            binary_split=params["binary_split"],
+            max_depth=params["max_depth"]
+    )
 
     for _ in range(num_add):
         model.models.append(create_new_tree(BEST_PARAMS))
@@ -236,15 +120,12 @@ def main():
         model._warning_tracker[idx] = 0
         model._drift_tracker[idx] = 0
 
-    print(f"✔ Architecture expanded successfully!")
+    print(f"[OK] Total trees after expand: {len(model.models)}")
 
-    # ============================================================
+    # --------------------------------------------------------
     # INCREMENTAL TRAINING
-    # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 5] INCREMENTAL TRAINING")
-    print(f"{'='*60}")
-    
+    # --------------------------------------------------------
+    print("\n[TRAIN] Incremental learning...")
     t0 = time.time()
 
     for i, row in df_train.iterrows():
@@ -254,166 +135,134 @@ def main():
         xi_scaled = scaler.transform_one(xi)
         model.learn_one(xi_scaled, yi)
 
-        if (i + 1) % 200 == 0:
-            elapsed = time.time() - t0
-            progress = (i + 1) / len(df_train) * 100
+        if (i + 1) % 500 == 0:
             print(
                 f"Progress: {i+1}/{len(df_train)} "
-                f"({progress:.1f}%) - {elapsed:.1f}s elapsed",
+                f"({(i+1)/len(df_train)*100:.1f}%)",
                 end="\r"
             )
 
-    elapsed = time.time() - t0
-    print(f"\n✔ Training completed in {elapsed:.2f}s")
-    print(f"✔ Samples per second: {len(df_train)/elapsed:.1f}")
+    print(f"\n[DONE] Training completed in {time.time() - t0:.2f}s")
 
-    # ============================================================
-    # EVAL AFTER RETRAIN
-    # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 6] POST-RETRAIN EVALUATION")
-    print(f"{'='*60}")
+    # --------------------------------------------------------
+    # EVALUATION (HOLD-OUT TEST)
+    # --------------------------------------------------------
+    print("\n[EVAL] Evaluating on TEST set...")
 
-    metrics_old = evaluate_dataset(
-        model, scaler, df_old, FEATURE_ORDER, encoder, 
-        "RETENTION / TEST_OLD (BASE DATA)"
-    )
+    acc = metrics.Accuracy()
+    prec = metrics.Precision()
+    rec = metrics.Recall()
+    f1 = metrics.F1()
+    kappa = metrics.CohenKappa()
 
-    metrics_new = evaluate_dataset(
-        model, scaler, df_new, FEATURE_ORDER, encoder, 
-        "ADAPTATION / TEST_NEW (DRIFT DATA)"
-    )
+    tp = tn = fp = fn = 0
 
-    # ============================================================
-    # CALCULATE DRIFT-AWARE METRICS
-    # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 7] CALCULATING DRIFT METRICS")
-    print(f"{'='*60}")
-    
-    F1_new_after = metrics_new["f1"]
-    F1_retention = metrics_old["f1"]
-    F1_BASE = 0.9964  # Production baseline F1 on original BASE distribution
+    for _, row in df_test.iterrows():
+        x = {k: row[k] for k in FEATURE_ORDER}
+        y = row["Label"]
 
-    # Retention: How much old knowledge is preserved
-    RETENTION = F1_retention / F1_BASE if F1_BASE > 0 else 0
+        x_scaled = scaler.transform_one(x)
+        y_pred = model.predict_one(x_scaled)
 
-    # Forgetting: Absolute performance drop on old distribution
-    FORGETTING = F1_BASE - F1_retention
+        if y_pred is None:
+            continue
 
-    # Adaptation: Performance gain on new distribution
-    ADAPTATION_GAIN = F1_new_after - F1_new_before
+        acc.update(y, y_pred)
+        prec.update(y, y_pred)
+        rec.update(y, y_pred)
+        f1.update(y, y_pred)
+        kappa.update(y, y_pred)
 
-    print(f"\n📊 DRIFT-AWARE METRICS:")
-    print(f"  Retention Ratio    : {RETENTION:.4f} ({RETENTION*100:.2f}%)")
-    print(f"  Forgetting         : {FORGETTING:.4f} ({FORGETTING*100:.2f}%)")
-    print(f"  Adaptation Gain    : {ADAPTATION_GAIN:.4f} ({ADAPTATION_GAIN*100:.2f}%)")
-    print(f"\n📈 DETAILED PERFORMANCE:")
-    print(f"  F1 (BASE before)   : {F1_BASE:.4f}")
-    print(f"  F1 (OLD after)     : {F1_retention:.4f}")
-    print(f"  F1 (NEW before)    : {F1_new_before:.4f}")
-    print(f"  F1 (NEW after)     : {F1_new_after:.4f}")
+        if y == 0 and y_pred == 0: tp += 1
+        elif y == 1 and y_pred == 1: tn += 1
+        elif y == 1 and y_pred == 0: fp += 1
+        elif y == 0 and y_pred == 1: fn += 1
 
-    # ============================================================
-    # SAVE ARTIFACTS
-    # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 8] SAVING ARTIFACTS")
-    print(f"{'='*60}")
-    
+    print("\n[RESULTS]")
+    print(f"F1-score        : {f1.get():.4f}")
+    print(f"Accuracy        : {acc.get():.4f}")
+    print(f"Precision       : {prec.get():.4f}")
+    print(f"Recall          : {rec.get():.4f}")
+    print(f"Cohen's Kappa   : {kappa.get():.4f}")
+    print("\n[CONFUSION MATRIX]")
+    print(f"TP: {tp} | FP: {fp}")
+    print(f"FN: {fn} | TN: {tn}")
+
+    # --------------------------------------------------------
+    # SAVE FOR MLFLOW STAGING
+    # --------------------------------------------------------
     joblib.dump(model, "model.pkl")
     joblib.dump(scaler, "scaler.pkl")
     joblib.dump(encoder, "label_encoder.pkl")
     joblib.dump(FEATURE_ORDER, "feature_order.pkl")
 
-    print(f"✔ Model artifacts saved locally")
+    print("\n[OK] Retrained model artifacts saved")
 
     # ============================================================
-    # MLFLOW LOGGING
+    # MLFLOW LOG + REGISTER
     # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 9] MLFLOW LOGGING")
-    print(f"{'='*60}")
+    print("\n[MLFLOW] Logging retrained model...")
 
     with mlflow.start_run(run_name="arf-incremental-retrain") as run:
-        # Log drift-aware metrics
-        mlflow.log_metric("retention_ratio", RETENTION)
-        mlflow.log_metric("forgetting", FORGETTING)
-        mlflow.log_metric("f1_base_before", F1_BASE)
-        mlflow.log_metric("f1_old_after", F1_retention)
-        mlflow.log_metric("f1_new_before", F1_new_before)
-        mlflow.log_metric("f1_new_after", F1_new_after)
-        mlflow.log_metric("adaptation_gain", ADAPTATION_GAIN)
-        
-        # Log detailed metrics
-        for prefix, m in [("old", metrics_old), ("new", metrics_new)]:
-            mlflow.log_metric(f"{prefix}_accuracy", m["accuracy"])
-            mlflow.log_metric(f"{prefix}_precision", m["precision"])
-            mlflow.log_metric(f"{prefix}_recall", m["recall"])
-            mlflow.log_metric(f"{prefix}_f1", m["f1"])
-            mlflow.log_metric(f"{prefix}_kappa", m["kappa"])
-        
-        # Log parameters
+        # -------------------------------
+        # LOG METRICS
+        # -------------------------------
+        mlflow.log_metric("f1", f1.get())
+        mlflow.log_metric("accuracy", acc.get())
+        mlflow.log_metric("precision", prec.get())
+        mlflow.log_metric("recall", rec.get())
+        mlflow.log_metric("kappa", kappa.get())
+
+        # -------------------------------
+        # LOG PARAMS
+        # -------------------------------
         mlflow.log_param("add_ratio", args.add_ratio)
         mlflow.log_param("n_trees_before", num_old)
         mlflow.log_param("n_trees_after", len(model.models))
-        mlflow.log_param("train_samples", len(df_train))
-        mlflow.log_param("test_old_samples", len(df_old))
-        mlflow.log_param("test_new_samples", len(df_new))
         mlflow.log_param("drift_confidence", BEST_PARAMS["drift_confidence"])
         mlflow.log_param("retrain_type", "incremental_arf")
-        mlflow.log_param("source_stage", MODEL_STAGE)
-        mlflow.log_param("seed", args.seed)
-        
-        # Log artifacts
+        mlflow.log_param("source_stage", "Production")
+
+        # -------------------------------
+        # LOG ARTIFACTS
+        # -------------------------------
         mlflow.log_artifact("model.pkl")
         mlflow.log_artifact("scaler.pkl")
         mlflow.log_artifact("label_encoder.pkl")
         mlflow.log_artifact("feature_order.pkl")
 
         run_id = run.info.run_id
-        print(f"✔ MLflow Run ID: {run_id}")
+        print(f"[MLFLOW] Run ID: {run_id}")
 
     # ============================================================
-    # PROMOTION DECISION
+    # DECISION: PROMOTE TO STAGING?
     # ============================================================
-    print(f"\n{'='*60}")
-    print("[STEP 10] PROMOTION DECISION")
-    print(f"{'='*60}")
-    
-    # Thresholds for promotion
-    MIN_RETENTION_RATIO = 0.90      # Keep ≥90% of old knowledge
-    MAX_FORGETTING = 0.10           # Allow ≤10% forgetting
-    MIN_ADAPTATION_GAIN = 0.05      # Improve ≥5% on new data
+    F1_THRESHOLD = 0.90
+    KAPPA_THRESHOLD = 0.90
 
     PROMOTE = (
-        RETENTION >= MIN_RETENTION_RATIO and
-        ADAPTATION_GAIN >= MIN_ADAPTATION_GAIN and
-        FORGETTING <= MAX_FORGETTING
+        f1.get() >= F1_THRESHOLD and
+        kappa.get() >= KAPPA_THRESHOLD
     )
 
-    print(f"\n🎯 PROMOTION CRITERIA:")
-    print(f"  Retention Ratio   : {RETENTION:.4f} {'✔' if RETENTION >= MIN_RETENTION_RATIO else '✘'} (≥{MIN_RETENTION_RATIO})")
-    print(f"  Adaptation Gain   : {ADAPTATION_GAIN:.4f} {'✔' if ADAPTATION_GAIN >= MIN_ADAPTATION_GAIN else '✘'} (≥{MIN_ADAPTATION_GAIN})")
-    print(f"  Forgetting        : {FORGETTING:.4f} {'✔' if FORGETTING <= MAX_FORGETTING else '✘'} (≤{MAX_FORGETTING})")
-    print(f"\n🚀 DECISION: {'PROMOTE TO STAGING' if PROMOTE else 'DO NOT PROMOTE'}")
+    print(f"[DECISION] Promote to STAGING: {PROMOTE}")
 
     if PROMOTE:
         client = mlflow.tracking.MlflowClient()
-        model_uri = f"runs:/{run_id}/model.pkl"
 
-        print(f"\n[MLFLOW] Registering model to Registry...")
+        model_uri = f"runs:/{run_id}"
+
+        print("[MLFLOW] Registering model to Registry...")
         result = client.create_model_version(
             name=MODEL_NAME,
             source=model_uri,
-            run_id=run_id,
-            description=f"Incremental retrain | Retention: {RETENTION:.3f} | Adaptation: {ADAPTATION_GAIN:.3f}"
+            run_id=run_id
         )
 
         version = result.version
-        print(f"✔ Created model version: {version}")
+        print(f"[MLFLOW] Created model version: {version}")
 
-        print(f"[MLFLOW] Transitioning to STAGING...")
+        print("[MLFLOW] Transitioning model to STAGING...")
         client.transition_model_version_stage(
             name=MODEL_NAME,
             version=version,
@@ -421,30 +270,14 @@ def main():
             archive_existing_versions=True
         )
 
-        print(f"\n{'='*60}")
-        print(f"✅ SUCCESS: Model v{version} promoted to STAGING!")
-        print(f"{'='*60}\n")
+        print(f"[SUCCESS] Model version {version} promoted to STAGING 🚀")
+
     else:
-        reasons = []
-        if RETENTION < MIN_RETENTION_RATIO:
-            reasons.append(f"Low retention ({RETENTION:.3f} < {MIN_RETENTION_RATIO})")
-        if ADAPTATION_GAIN < MIN_ADAPTATION_GAIN:
-            reasons.append(f"Insufficient adaptation ({ADAPTATION_GAIN:.3f} < {MIN_ADAPTATION_GAIN})")
-        if FORGETTING > MAX_FORGETTING:
-            reasons.append(f"Excessive forgetting ({FORGETTING:.3f} > {MAX_FORGETTING})")
-        
-        print(f"\n{'='*60}")
-        print(f"⚠️  MODEL NOT PROMOTED")
-        print(f"{'='*60}")
-        print(f"Reasons:")
-        for r in reasons:
-            print(f"  • {r}")
-        print(f"\nConsider:")
-        print(f"  • Collecting more training data")
-        print(f"  • Adjusting add_ratio parameter")
-        print(f"  • Using rehearsal/replay techniques")
-        print(f"  • Implementing elastic weight consolidation")
-        print(f"{'='*60}\n")
+        print(
+            "[SKIP] Model did NOT meet promotion criteria → "
+            "kept for analysis only"
+        )
+
 
 if __name__ == "__main__":
     main()
