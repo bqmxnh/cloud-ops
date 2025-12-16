@@ -32,19 +32,18 @@ client = MlflowClient()
 # ============================================================
 def get_production_version():
     try:
-        mv = client.get_model_version_by_alias(
-            MODEL_NAME, "production"
-        )
-        return int(mv.version)
+        versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+        if not versions:
+            return None
+        return int(versions[0].version)
     except Exception as e:
-        print(f"[MLFLOW] Cannot fetch production alias: {e}")
+        print(f"[MLFLOW] Cannot fetch production version: {e}")
         return None
 
 
-
-def load_from_registry(model_name, alias="production"):
+def load_from_registry(model_name, stage):
     try:
-        uri = f"models:/{model_name}@{alias}"
+        uri = f"models:/{model_name}/{stage}"
         print(f"[MLFLOW] Loading: {uri}")
 
         local_dir = mlflow.artifacts.download_artifacts(uri)
@@ -84,7 +83,7 @@ def init_model():
     new_version = get_production_version()
 
     with G.model_lock:
-        registry_dir = load_from_registry(MODEL_NAME, "production")
+        registry_dir = load_from_registry(MODEL_NAME, MODEL_STAGE)
 
         try:
             if registry_dir:
