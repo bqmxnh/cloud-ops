@@ -5,7 +5,9 @@ from app.websocket import router as ws_router
 from app.inference import router as predict_router
 from app.metrics import router as metrics_router
 from app.evaluation import router as evaluate_router
+from app.model_loader import init_model, auto_refresh_worker
 from app import globals as G
+import threading
 import asyncio
 
 
@@ -22,6 +24,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     init_model()
+
+    threading.Thread(
+        target=auto_refresh_worker,
+        daemon=True
+    ).start()
+
+    print("[STARTUP] Model auto-refresh worker started")
 
 
 app.include_router(ws_router)
