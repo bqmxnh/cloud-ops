@@ -6,8 +6,41 @@ from app.websocket import broadcast
 from app.metrics import PRED_COUNT, LATENCY
 import time
 import asyncio
+import math
+from collections import defaultdict
+
 
 router = APIRouter()
+
+def entropy(p: dict) -> float:
+    return -sum(v * math.log(v + 1e-9) for v in p.values())
+
+def predict_proba_confident(model, x, entropy_th=0.25, min_trees=3):
+    """
+    Aggregate probabilities only from confident trees (low entropy).
+    Fallback to full ensemble if not enough trees are confident.
+    """
+    agg = defaultdict(float)
+    used = 0
+
+    # ARFClassifier keeps base models here
+    for tree in model.models:
+        p = tree.predict_proba_one(x)
+        if not p:
+            continue
+
+        if entropy(p) < entropy_th:
+            for k, v in p.items():
+                agg[k] += v
+            used += 1
+
+    # Fallback if not enough confident trees
+    if used < min_trees:
+        return model.predict_proba_one(x)
+
+    s = sum(agg.values())
+    return {k: v / s for k, v in agg.items()}
+
 
 @router.post("")
 async def predict(flow: FlowSchema):
@@ -22,7 +55,13 @@ async def predict(flow: FlowSchema):
         G.prediction_events[flow.flow_id] = asyncio.Event()
 
     x_scaled = G.scaler.transform_one(flow.features)
-    proba = G.model.predict_proba_one(x_scaled)
+
+    proba = predict_proba_confident(
+        G.model,
+        x_scaled,
+        entropy_th=0.25,
+        min_trees=3
+    )
 
     if proba:
         pred = max(proba, key=proba.get)
@@ -30,6 +69,7 @@ async def predict(flow: FlowSchema):
     else:
         pred = G.model.predict_one(x_scaled)
         conf = 1.0
+
 
     decoded = G.encoder.inverse_transform([int(pred)])[0]
 
