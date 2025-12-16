@@ -27,7 +27,6 @@ async def evaluate(file: UploadFile = File(...)):
     contents = await file.read()
     df = pd.read_csv(io.BytesIO(contents))
 
-    # find label column (case-insensitive)
     label_col = next((c for c in df.columns if c.lower() == "label"), None)
     if label_col is None:
         return {"error": "CSV must contain Label column"}
@@ -54,14 +53,14 @@ async def evaluate(file: UploadFile = File(...)):
         try:
             y_true = int(G.encoder.transform([y_true_label])[0])
         except Exception:
-            continue  # unknown label → skip
+            continue
 
         # ----- FEATURES -----
         try:
             x_raw = row.drop(label_col).to_dict()
             x = {k: float(x_raw[k]) for k in G.FEATURE_ORDER}
         except Exception:
-            continue  # malformed row → skip
+            continue
 
         x_scaled = G.scaler.transform_one(x)
         y_pred = G.model.predict_one(x_scaled)
@@ -75,7 +74,10 @@ async def evaluate(file: UploadFile = File(...)):
         metric_rec.update(y_true, y_pred)
         metric_f1.update(y_true, y_pred)
         metric_kappa.update(y_true, y_pred)
-        metric_cm.update(y_true, y_pred)
+
+        y_true_str = G.encoder.inverse_transform([y_true])[0]
+        y_pred_str = G.encoder.inverse_transform([y_pred])[0]
+        metric_cm.update(y_true_str, y_pred_str)
 
         rows_used += 1
 
