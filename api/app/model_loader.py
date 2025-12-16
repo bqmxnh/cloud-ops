@@ -21,7 +21,7 @@ MODEL_STAGE = "Production"
 BUCKET = os.getenv("MODEL_BUCKET", "arf-ids-model-bucket")
 VERSION = os.getenv("MODEL_VERSION", "v1.0")
 
-CHECK_INTERVAL = 60  # seconds
+CHECK_INTERVAL = 10  # seconds
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient()
