@@ -11,8 +11,6 @@ router = APIRouter()
 # BASIC METRICS
 # =============================
 PRED_COUNT   = Counter("prediction_requests_total", "Prediction requests")
-FB_COUNT     = Counter("feedback_requests_total", "Feedback requests")
-DRIFT_COUNT  = Counter("drift_events_total", "Number of drift detections")
 LATENCY      = Histogram("prediction_latency_ms", "Prediction latency (ms)")
 
 # =============================
