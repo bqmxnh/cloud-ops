@@ -86,6 +86,56 @@ def main():
     print(f"✔ Train: {len(df_train)}")
     print(f"✔ Test Old: {len(df_old)}")
     print(f"✔ Test New: {len(df_new)}")    
+    # ============================================================
+    # EVALUATION HELPERS (ADDED)
+    # ============================================================
+    def evaluate_dataset(model, scaler, df, feature_order, name):
+        acc = metrics.Accuracy()
+        prec = metrics.Precision()
+        rec = metrics.Recall()
+        f1 = metrics.F1()
+        kappa = metrics.CohenKappa()
+
+        tp = tn = fp = fn = 0
+
+        for _, row in df.iterrows():
+            x = {k: row[k] for k in feature_order}
+            y = row["Label"]
+
+            x_scaled = scaler.transform_one(x)
+            y_pred = model.predict_one(x_scaled)
+
+            if y_pred is None:
+                continue
+
+            acc.update(y, y_pred)
+            prec.update(y, y_pred)
+            rec.update(y, y_pred)
+            f1.update(y, y_pred)
+            kappa.update(y, y_pred)
+
+            if y == 0 and y_pred == 0: tp += 1
+            elif y == 1 and y_pred == 1: tn += 1
+            elif y == 1 and y_pred == 0: fp += 1
+            elif y == 0 and y_pred == 1: fn += 1
+
+        print(f"\n[{name}]")
+        print(f"F1-score        : {f1.get():.4f}")
+        print(f"Accuracy        : {acc.get():.4f}")
+        print(f"Precision       : {prec.get():.4f}")
+        print(f"Recall          : {rec.get():.4f}")
+        print(f"Cohen's Kappa   : {kappa.get():.4f}")
+        print("[CONFUSION MATRIX]")
+        print(f"TP: {tp} | FP: {fp}")
+        print(f"FN: {fn} | TN: {tn}")
+
+        return {
+            "f1": f1.get(),
+            "accuracy": acc.get(),
+            "precision": prec.get(),
+            "recall": rec.get(),
+            "kappa": kappa.get(),
+        }
 
     # ============================================================
     # EVAL BEFORE RETRAIN (ADAPTATION BASELINE)
@@ -159,56 +209,6 @@ def main():
 
     print(f"\n[DONE] Training completed in {time.time() - t0:.2f}s")
 
-    # ============================================================
-    # EVALUATION HELPERS (ADDED)
-    # ============================================================
-    def evaluate_dataset(model, scaler, df, feature_order, name):
-        acc = metrics.Accuracy()
-        prec = metrics.Precision()
-        rec = metrics.Recall()
-        f1 = metrics.F1()
-        kappa = metrics.CohenKappa()
-
-        tp = tn = fp = fn = 0
-
-        for _, row in df.iterrows():
-            x = {k: row[k] for k in feature_order}
-            y = row["Label"]
-
-            x_scaled = scaler.transform_one(x)
-            y_pred = model.predict_one(x_scaled)
-
-            if y_pred is None:
-                continue
-
-            acc.update(y, y_pred)
-            prec.update(y, y_pred)
-            rec.update(y, y_pred)
-            f1.update(y, y_pred)
-            kappa.update(y, y_pred)
-
-            if y == 0 and y_pred == 0: tp += 1
-            elif y == 1 and y_pred == 1: tn += 1
-            elif y == 1 and y_pred == 0: fp += 1
-            elif y == 0 and y_pred == 1: fn += 1
-
-        print(f"\n[{name}]")
-        print(f"F1-score        : {f1.get():.4f}")
-        print(f"Accuracy        : {acc.get():.4f}")
-        print(f"Precision       : {prec.get():.4f}")
-        print(f"Recall          : {rec.get():.4f}")
-        print(f"Cohen's Kappa   : {kappa.get():.4f}")
-        print("[CONFUSION MATRIX]")
-        print(f"TP: {tp} | FP: {fp}")
-        print(f"FN: {fn} | TN: {tn}")
-
-        return {
-            "f1": f1.get(),
-            "accuracy": acc.get(),
-            "precision": prec.get(),
-            "recall": rec.get(),
-            "kappa": kappa.get(),
-        }
     # ============================
     # EVALUATION ON TEST SETS
     # ============================
