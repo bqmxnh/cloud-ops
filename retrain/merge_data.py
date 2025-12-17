@@ -9,10 +9,12 @@ import sys
 # ARGS
 # ============================================================
 def parse_args():
-    ap = argparse.ArgumentParser("Merge drift + base data (7:3, streaming base)")
+    ap = argparse.ArgumentParser(
+        "Merge drift + base (concept-balanced, drift as anchor)"
+    )
     ap.add_argument("--drift", required=True, help="drift_raw.csv")
     ap.add_argument("--base", required=True, help="base.csv (large)")
-    ap.add_argument("--output", default="/data/drift_merged.csv")
+    ap.add_argument("--output", required=True, help="/data/drift_merged.csv")
     ap.add_argument("--seed", type=int, default=42)
     return ap.parse_args()
 
@@ -31,17 +33,13 @@ def explode_features(drift_rows, feature_columns):
         feats = json.loads(r["features_json"])
         row = {c: feats.get(c, 0) for c in feature_columns}
         row["Label"] = r["true_label"].upper()
+        row["Source"] = "DRIFT"
         out.append(row)
     return out
 
 def reservoir_sample_csv(path, k, seed=42):
-    """
-    Reservoir sampling for large CSV.
-    Keeps k random rows uniformly.
-    """
     random.seed(seed)
     reservoir = []
-
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader):
@@ -51,8 +49,18 @@ def reservoir_sample_csv(path, k, seed=42):
                 j = random.randint(0, i)
                 if j < k:
                     reservoir[j] = row
-
     return reservoir
+
+def filter_by_label(rows, label, k):
+    out = []
+    for r in rows:
+        if r["Label"].upper() == label:
+            r = dict(r)
+            r["Source"] = "BASE"
+            out.append(r)
+            if len(out) >= k:
+                break
+    return out
 
 # ============================================================
 # MAIN
@@ -62,76 +70,80 @@ def main():
     random.seed(args.seed)
 
     # --------------------------------------------------------
-    # LOAD DRIFT (SMALL)
+    # LOAD DRIFT
     # --------------------------------------------------------
     print("[INFO] Loading drift data...")
     drift_raw, _ = read_drift_csv(args.drift)
-
     if not drift_raw:
-        print("[ERROR] Drift file is empty")
+        print("[ERROR] Drift file empty")
         sys.exit(1)
 
-    drift_n = len(drift_raw)
+    D = len(drift_raw)
+    print(f"[INFO] Drift attack samples = {D}")
 
     # --------------------------------------------------------
-    # COMPUTE 7:3 RATIO
-    # --------------------------------------------------------
-    total_n = int(drift_n / 0.7)
-    base_n = max(0, total_n - drift_n)
-
-    print(f"[INFO] Drift samples : {drift_n}")
-    print(f"[INFO] Base samples  : {base_n} (reservoir sampling)")
-
-    # --------------------------------------------------------
-    # LOAD BASE (STREAMING)
+    # LOAD BASE (oversample buffer)
     # --------------------------------------------------------
     print("[INFO] Streaming base.csv ...")
-    base_sample = reservoir_sample_csv(
+    base_buffer = reservoir_sample_csv(
         args.base,
-        k=base_n,
+        k=D * 4,   # buffer để đủ benign + attack
         seed=args.seed
     )
 
-    if not base_sample:
-        print("[ERROR] Base sample is empty")
+    if not base_buffer:
+        print("[ERROR] Base sample empty")
         sys.exit(1)
 
-    base_fields = list(base_sample[0].keys())
-
+    base_fields = list(base_buffer[0].keys())
     if "Label" not in base_fields:
-        print("[ERROR] Base file must contain 'Label' column")
+        print("[ERROR] Base CSV must contain Label column")
         sys.exit(1)
 
     feature_cols = [c for c in base_fields if c != "Label"]
 
     # --------------------------------------------------------
+    # CONCEPT-BALANCED BASE SAMPLING
+    # --------------------------------------------------------
+    attack_base = filter_by_label(base_buffer, "ATTACK", D)
+    benign_base = filter_by_label(base_buffer, "BENIGN", 2 * D)
+
+    if len(attack_base) < D or len(benign_base) < 2 * D:
+        print("[ERROR] Not enough base samples for concept balance")
+        sys.exit(1)
+
+    print(f"[INFO] Base ATTACK  = {len(attack_base)}")
+    print(f"[INFO] Base BENIGN  = {len(benign_base)}")
+
+    # --------------------------------------------------------
     # EXPLODE DRIFT FEATURES
     # --------------------------------------------------------
-    print("[INFO] Exploding drift features_json...")
+    print("[INFO] Exploding drift features...")
     drift_rows = explode_features(drift_raw, feature_cols)
 
     # --------------------------------------------------------
-    # MERGE & SHUFFLE
+    # MERGE
     # --------------------------------------------------------
-    merged = drift_rows + base_sample
+    merged = drift_rows + attack_base + benign_base
     random.shuffle(merged)
 
     # --------------------------------------------------------
     # WRITE OUTPUT
     # --------------------------------------------------------
+    fieldnames = feature_cols + ["Label", "Source"]
     with open(args.output, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=base_fields)
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(merged)
 
     print("=" * 80)
     print("MERGE_SUCCESS=true")
-    print(f"DRIFT_SAMPLES={drift_n}")
-    print(f"BASE_SAMPLES={len(base_sample)}")
-    print(f"TOTAL_SAMPLES={len(merged)}")
+    print(f"DRIFT_ATTACK={D}")
+    print(f"BASE_ATTACK={len(attack_base)}")
+    print(f"BASE_BENIGN={len(benign_base)}")
+    print(f"TOTAL={len(merged)}")
     print(f"OUTPUT={args.output}")
     print("=" * 80)
-    sys.exit(0)
 
 if __name__ == "__main__":
     main()
