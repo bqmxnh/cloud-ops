@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from collections import deque
 from boto3.dynamodb.conditions import Attr
 from river.drift import ADWIN
+import subprocess
+
 
 # ============================================================
 # CONFIG
@@ -17,6 +19,10 @@ REGION = "us-east-1"
 EXIT_NO_DRIFT = 10
 EXIT_NOT_ENOUGH = 11
 EXIT_DRIFT = 0
+
+COOLDOWN_HOURS = 24
+S3_COOLDOWN_URI = "s3://qmuit-training-data-store/cooldown/last_retrain_ts.txt"
+LOCAL_COOLDOWN_FILE = "/tmp/last_retrain_ts.txt"
 
 
 # ============================================================
@@ -30,6 +36,24 @@ def parse_args():
     ap.add_argument("--window", type=int, default=30, help="Trend window size (K)")
     ap.add_argument("--debug", action="store_true", help="Verbose output")
     return ap.parse_args()
+
+def can_retrain():
+    try:
+        subprocess.check_call(
+            ["aws", "s3", "cp", S3_COOLDOWN_URI, LOCAL_COOLDOWN_FILE],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        # Chưa từng retrain
+        return True
+
+    with open(LOCAL_COOLDOWN_FILE) as f:
+        last_ts = datetime.fromisoformat(f.read().strip().replace("Z", "+00:00"))
+
+    hours = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600
+    return hours >= COOLDOWN_HOURS
+
 
 
 # ============================================================
@@ -135,10 +159,20 @@ def main():
         print("DRIFT=true")
         print("DRIFT_TYPE=NEGATIVE")
         print(f"FIRST_DRIFT_TS={negative_drift_ts}")
-        sys.exit(EXIT_DRIFT)
+
+        if can_retrain():
+            print("RETRAIN=true")
+            sys.exit(EXIT_DRIFT)
+        else:
+            print("RETRAIN=false")
+            print("REASON=COOLDOWN_ACTIVE")
+            sys.exit(EXIT_NO_DRIFT)
+
     else:
         print("DRIFT=false")
+        print("RETRAIN=false")
         sys.exit(EXIT_NO_DRIFT)
+
 
 
 if __name__ == "__main__":

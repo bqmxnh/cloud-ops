@@ -5,6 +5,9 @@ import joblib
 import random
 import time
 from pathlib import Path
+import subprocess
+from datetime import datetime, timezone
+
 
 from river import tree, metrics, drift
 import mlflow
@@ -244,6 +247,21 @@ def main():
         f1.get() >= F1_THRESHOLD and
         kappa.get() >= KAPPA_THRESHOLD
     )
+
+    if PROMOTE:
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        with open("/tmp/last_retrain_ts.txt", "w") as f:
+            f.write(ts)
+
+        subprocess.check_call([
+            "aws", "s3", "cp",
+            "/tmp/last_retrain_ts.txt",
+            "s3://qmuit-training-data-store/cooldown/last_retrain_ts.txt"
+        ])
+
+        print(f"[COOLDOWN] Updated last retrain timestamp: {ts}")
+
 
     with open("/tmp/promote", "w") as f:
         f.write("true" if PROMOTE else "false")

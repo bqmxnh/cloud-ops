@@ -1,4 +1,5 @@
 [core]
+    no_scm = True
     remote = trainingstore
 ['remote "trainingstore"']
     url = s3://qmuit-training-data-store

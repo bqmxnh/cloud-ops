@@ -39,7 +39,7 @@ spec:
 
         - name: fetch-drift
           dependencies: [check-drift]
-          when: "{{tasks.check-drift.outputs.parameters.drift}} == true"
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: fetch-drift
           arguments:
             parameters:
@@ -105,6 +105,7 @@ spec:
         args:
           - |
             echo "[STEP] CHECK DRIFT"
+
             python /app/retrain/check_drift.py \
               --hours {{workflow.parameters.hours}} \
               --delta {{workflow.parameters.delta}} \
@@ -112,17 +113,35 @@ spec:
               --min-samples {{workflow.parameters.min_samples}} \
               | tee /tmp/check.log
 
+            # DRIFT FLAG
             if grep -q "DRIFT=true" /tmp/check.log; then
               echo "true" > /tmp/drift
-              grep FIRST_DRIFT_TS /tmp/check.log | cut -d= -f2 > /tmp/drift_ts
             else
               echo "false" > /tmp/drift
             fi
+
+            # RETRAIN FLAG (NEW)
+            if grep -q "RETRAIN=true" /tmp/check.log; then
+              echo "true" > /tmp/retrain
+            else
+              echo "false" > /tmp/retrain
+            fi
+
+            # SAFE drift_ts
+            if grep -q "FIRST_DRIFT_TS" /tmp/check.log; then
+              grep FIRST_DRIFT_TS /tmp/check.log | cut -d= -f2 > /tmp/drift_ts
+            else
+              echo "" > /tmp/drift_ts
+            fi
+
       outputs:
         parameters:
           - name: drift
             valueFrom:
               path: /tmp/drift
+          - name: retrain      
+            valueFrom:
+              path: /tmp/retrain
           - name: drift_ts
             valueFrom:
               path: /tmp/drift_ts
