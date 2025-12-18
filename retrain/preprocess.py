@@ -4,6 +4,21 @@ import pandas as pd
 from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import train_test_split
 
+def print_distribution(df, title):
+    print("=" * 80)
+    print(title)
+    print("-" * 80)
+    print(
+        df.groupby(["Source", "Label"])
+          .size()
+          .reset_index(name="Count")
+          .to_string(index=False)
+    )
+    print("-" * 80)
+    print("TOTAL =", len(df))
+    print("=" * 80)
+
+
 # ============================================================
 # ARGS
 # ============================================================
@@ -30,15 +45,40 @@ def main():
     if "Label" not in df.columns:
         raise RuntimeError("Missing Label column")
 
-    # --------------------------------------------------------
-    # HOLD-OUT SPLIT (STRATIFIED)
-    # --------------------------------------------------------
-    df_train, df_test = train_test_split(
-        df,
-        test_size=args.test_size,
-        random_state=args.seed,
-        stratify=df["Label"]
+
+    # ============================================================
+    # SOURCE-AWARE HOLD-OUT SPLIT (preserve 1:1:2)
+    # ============================================================
+
+    df_drift = df[df["Source"] == "DRIFT"]  # ATTACK only
+    df_base_attack = df[(df["Source"] == "BASE") & (df["Label"] == "ATTACK")]
+    df_base_benign = df[(df["Source"] == "BASE") & (df["Label"] == "BENIGN")]
+
+    def split(df_part):
+        return train_test_split(
+            df_part,
+            test_size=args.test_size,
+            random_state=args.seed
+        )
+
+    drift_train, drift_test = split(df_drift)
+    base_attack_train, base_attack_test = split(df_base_attack)
+    base_benign_train, base_benign_test = split(df_base_benign)
+
+    df_train = pd.concat(
+        [drift_train, base_attack_train, base_benign_train],
+        ignore_index=True
     )
+
+    df_test = pd.concat(
+        [drift_test, base_attack_test, base_benign_test],
+        ignore_index=True
+    )
+
+    print_distribution(df_train, "[TRAIN] Distribution BEFORE SMOTE (Source x Label)")
+    print_distribution(df_test,  "[TEST ] Distribution HOLD-OUT (Source x Label)")
+
+
 
     print("[INFO] Distribution BEFORE SMOTE (train):")
     print(df_train["Label"].value_counts())
@@ -61,9 +101,10 @@ def main():
         axis=1
     )
 
-    print("[INFO] Distribution AFTER SMOTE (train):")
+    print("=" * 80)
+    print("[TRAIN] Distribution AFTER SMOTE (Label only)")
     print(df_train_smote["Label"].value_counts())
-    print("-" * 60)
+    print("=" * 80)
 
     # --------------------------------------------------------
     # SAVE

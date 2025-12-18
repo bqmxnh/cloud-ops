@@ -38,6 +38,14 @@ spec:
             - name: drift_ts
               value: "{{tasks.check-drift.outputs.parameters.drift_ts}}"
 
+      - name: save-drift
+        dependencies: [fetch-drift]
+        template: save-drift-dvc
+        arguments:
+          artifacts:
+            - name: drift_raw
+              from: "{{tasks.fetch-drift.outputs.artifacts.drift_raw}}"
+
       - name: pull-base
         dependencies: [fetch-drift]
         template: pull-base-dvc
@@ -148,6 +156,40 @@ spec:
       artifacts:
         - name: drift_raw
           path: /data/drift_raw.csv
+
+  - name: save-drift-dvc
+    inputs:
+      artifacts:
+        - name: drift_raw
+          path: /data/drift_raw.csv
+    container:
+      image: bqmxnh/cloud-ops-retrain:latest
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "[STEP] SAVE DRIFT DATA TO DVC"
+
+          cd /app
+
+          # Init DVC (no git, giống pull-base)
+          dvc init --no-scm -f
+
+          # Add remote
+          dvc remote add -f trainingstore s3://qmuit-training-data-store
+          dvc remote default trainingstore
+
+          # Copy drift data vào dataset folder
+          mkdir -p datasets/drift
+          cp /data/drift_raw.csv datasets/drift/drift_$(date +%s).csv
+
+          # Track with DVC
+          dvc add datasets/drift/drift_*.csv
+
+          # Push to remote
+          dvc push
+
+          echo "[OK] Drift data versioned in DVC"
+
 
   
   - name: pull-base-dvc
