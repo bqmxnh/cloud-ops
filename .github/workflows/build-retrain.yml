@@ -34,13 +34,3 @@ jobs:
         run: |
           docker push bqmxnh/cloud-ops-retrain:${{ steps.vars.outputs.tag }}
           docker push bqmxnh/cloud-ops-retrain:latest
-
-      - name: Trigger Helm Chart Update
-        uses: benc-uk/workflow-dispatch@v1
-        with:
-          workflow: "Update Helm Chart"
-          repo: bqmxnh/manifests-cloud-ops
-          ref: "main"
-          token: ${{ secrets.PAT_TOKEN }}
-          inputs: |
-            {"image_tag": "${{ steps.vars.outputs.tag }}", "service": "retrain"}
