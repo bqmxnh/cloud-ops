@@ -252,16 +252,15 @@ def main():
     if PROMOTE:
         ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        try:
-            s3 = boto3.client("s3")
-            s3.put_object(
-                Bucket="qmuit-training-data-store",
-                Key="cooldown/last_retrain_ts.txt",
-                Body=ts.encode("utf-8")
-            )
-            print(f"[COOLDOWN] Updated last retrain timestamp: {ts}")
-        except Exception as e:
-            print(f"[WARN] Failed to update cooldown file: {e}")
+        s3 = boto3.client("s3")
+        s3.put_object(
+            Bucket="qmuit-training-data-store",
+            Key="cooldown/last_retrain_ts.txt",
+            Body=ts.encode("utf-8")
+        )
+
+        print(f"[STATE] last_retrain_ts updated = {ts}")
+
 
     with open("/tmp/promote", "w") as f:
         f.write("true" if PROMOTE else "false")

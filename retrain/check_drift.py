@@ -37,21 +37,27 @@ def parse_args():
     ap.add_argument("--debug", action="store_true", help="Verbose output")
     return ap.parse_args()
 
-def can_retrain():
+def load_last_retrain_ts():
     try:
         subprocess.check_call(
             ["aws", "s3", "cp", S3_COOLDOWN_URI, LOCAL_COOLDOWN_FILE],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
+        with open(LOCAL_COOLDOWN_FILE) as f:
+            ts = f.read().strip()
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except Exception:
-        # Chưa từng retrain
+        return None
+
+
+
+def can_retrain():
+    last_retrain_ts = load_last_retrain_ts()
+    if last_retrain_ts is None:
         return True
 
-    with open(LOCAL_COOLDOWN_FILE) as f:
-        last_ts = datetime.fromisoformat(f.read().strip().replace("Z", "+00:00"))
-
-    hours = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600
+    hours = (datetime.now(timezone.utc) - last_retrain_ts).total_seconds() / 3600
     return hours >= COOLDOWN_HOURS
 
 
@@ -160,6 +166,17 @@ def main():
         print("DRIFT_TYPE=NEGATIVE")
         print(f"FIRST_DRIFT_TS={negative_drift_ts}")
 
+        last_retrain_ts = load_last_retrain_ts()
+
+        if last_retrain_ts is not None:
+            last_retrain_ms = int(last_retrain_ts.timestamp() * 1000)
+
+            if negative_drift_ts <= last_retrain_ms:
+                print("RETRAIN=false")
+                print("REASON=DRIFT_ALREADY_HANDLED")
+                sys.exit(EXIT_NO_DRIFT)
+
+
         if can_retrain():
             print("RETRAIN=true")
             sys.exit(EXIT_DRIFT)
@@ -167,6 +184,7 @@ def main():
             print("RETRAIN=false")
             print("REASON=COOLDOWN_ACTIVE")
             sys.exit(EXIT_NO_DRIFT)
+
 
     else:
         print("DRIFT=false")
