@@ -8,12 +8,15 @@ def print_distribution(df, title):
     print("=" * 80)
     print(title)
     print("-" * 80)
-    print(
-        df.groupby(["Source", "Label"])
-          .size()
-          .reset_index(name="Count")
-          .to_string(index=False)
-    )
+    if "Source" in df.columns:
+        print(
+            df.groupby(["Source", "Label"])
+              .size()
+              .reset_index(name="Count")
+              .to_string(index=False)
+        )
+    else:
+        print(df["Label"].value_counts())
     print("-" * 80)
     print("TOTAL =", len(df))
     print("=" * 80)
@@ -24,7 +27,7 @@ def print_distribution(df, title):
 # ============================================================
 def parse_args():
     ap = argparse.ArgumentParser(
-        "Preprocess: split first, SMOTE on train only"
+        "Preprocess: source-aware split, SMOTE on train only"
     )
     ap.add_argument("--input", required=True, help="/data/drift_merged.csv")
     ap.add_argument("--train-out", required=True, help="/data/train_smote.csv")
@@ -45,16 +48,18 @@ def main():
     if "Label" not in df.columns:
         raise RuntimeError("Missing Label column")
 
-
     # ============================================================
-    # SOURCE-AWARE HOLD-OUT SPLIT (preserve 1:1:2)
+    # SOURCE-AWARE HOLD-OUT SPLIT
     # ============================================================
-
+    print("[INFO] Splitting by Source to preserve distribution...")
+    
     df_drift = df[df["Source"] == "DRIFT"]  # ATTACK only
     df_base_attack = df[(df["Source"] == "BASE") & (df["Label"] == "ATTACK")]
     df_base_benign = df[(df["Source"] == "BASE") & (df["Label"] == "BENIGN")]
 
     def split(df_part):
+        if len(df_part) == 0:
+            return pd.DataFrame(), pd.DataFrame()
         return train_test_split(
             df_part,
             test_size=args.test_size,
@@ -78,53 +83,31 @@ def main():
     print_distribution(df_train, "[TRAIN] Distribution BEFORE SMOTE (Source x Label)")
     print_distribution(df_test,  "[TEST ] Distribution HOLD-OUT (Source x Label)")
 
-    print("[INFO] Distribution BEFORE SMOTE (train):")
-    print(df_train["Label"].value_counts())
-    print("-" * 60)
+    # --------------------------------------------------------
+    # IMPORTANT: DROP Source BEFORE SMOTE
+    # --------------------------------------------------------
+    print("[INFO] Dropping 'Source' column from both train and test...")
+    
+    X_train = df_train.drop(columns=["Label", "Source"], errors="ignore")
+    y_train = df_train["Label"]
+    
+    # Drop Source from test too to match train features
+    X_test = df_test.drop(columns=["Label", "Source"], errors="ignore")
+    y_test = df_test["Label"]
 
-    # ========================================================
-    # 🔍 DEBUG: BEFORE SMOTE
-    # ========================================================
-    print("\n" + "🔍" * 40)
-    print("DEBUG: BEFORE SMOTE")
-    print("🔍" * 40)
-    print(f"df_train columns: {df_train.columns.tolist()}")
-    print(f"df_train shape: {df_train.shape}")
-    print(f"df_test columns: {df_test.columns.tolist()}")
-    print(f"df_test shape: {df_test.shape}")
-    print("🔍" * 40 + "\n")
+    print(f"[DEBUG] Train features: {X_train.shape[1]} columns")
+    print(f"[DEBUG] Test features: {X_test.shape[1]} columns")
+
+    print("\n[INFO] Distribution BEFORE SMOTE (train):")
+    print(y_train.value_counts())
+    print("-" * 60)
 
     # --------------------------------------------------------
     # SMOTE (TRAIN ONLY)
     # --------------------------------------------------------
-    X_train = df_train.drop(columns=["Label", "Source"], errors="ignore")
-    y_train = df_train["Label"]
-
-    # ========================================================
-    # 🔍 DEBUG: AFTER DROP
-    # ========================================================
-    print("\n" + "🔍" * 40)
-    print("DEBUG: AFTER DROP (before SMOTE)")
-    print("🔍" * 40)
-    print(f"X_train columns: {X_train.columns.tolist()}")
-    print(f"X_train shape: {X_train.shape}")
-    print(f"y_train shape: {y_train.shape}")
-    print(f"'Source' in X_train: {'Source' in X_train.columns}")
-    print("🔍" * 40 + "\n")
-
+    print("[INFO] Applying SMOTE to training set...")
     smote = SMOTE(random_state=args.seed)
     X_res, y_res = smote.fit_resample(X_train, y_train)
-
-    # ========================================================
-    # 🔍 DEBUG: AFTER SMOTE
-    # ========================================================
-    print("\n" + "🔍" * 40)
-    print("DEBUG: AFTER SMOTE")
-    print("🔍" * 40)
-    print(f"X_res columns: {X_res.shape[1]} features")
-    print(f"X_res shape: {X_res.shape}")
-    print(f"y_res shape: {y_res.shape}")
-    print("🔍" * 40 + "\n")
 
     df_train_smote = pd.concat(
         [
@@ -134,49 +117,44 @@ def main():
         axis=1
     )
 
-    print("=" * 80)
-    print("[TRAIN] Distribution AFTER SMOTE (Label only)")
-    print(df_train_smote["Label"].value_counts())
-    print("=" * 80)
+    # Reconstruct test without Source
+    df_test_clean = pd.concat(
+        [
+            X_test.reset_index(drop=True),
+            y_test.reset_index(drop=True)
+        ],
+        axis=1
+    )
 
-    # ========================================================
-    # 🔍 DEBUG: FINAL COMPARISON
-    # ========================================================
-    print("\n" + "🚨" * 40)
-    print("DEBUG: FINAL TRAIN vs TEST COMPARISON")
-    print("🚨" * 40)
-    print(f"df_train_smote columns: {df_train_smote.columns.tolist()}")
-    print(f"df_train_smote shape: {df_train_smote.shape}")
-    print(f"'Source' in df_train_smote: {'Source' in df_train_smote.columns}")
-    print("-" * 80)
-    print(f"df_test columns: {df_test.columns.tolist()}")
-    print(f"df_test shape: {df_test.shape}")
-    print(f"'Source' in df_test: {'Source' in df_test.columns}")
-    print("-" * 80)
-    
+    print("\n[INFO] Distribution AFTER SMOTE (train):")
+    print(df_train_smote["Label"].value_counts())
+    print("-" * 60)
+
+    # --------------------------------------------------------
+    # VALIDATION CHECK
+    # --------------------------------------------------------
     train_cols = set(df_train_smote.columns)
-    test_cols = set(df_test.columns)
+    test_cols = set(df_test_clean.columns)
     
     if train_cols != test_cols:
-        print("❌ COLUMN MISMATCH DETECTED!")
-        print(f"   Columns in TRAIN but NOT in TEST: {train_cols - test_cols}")
-        print(f"   Columns in TEST but NOT in TRAIN: {test_cols - train_cols}")
-        print("\n💡 THIS IS THE BUG CAUSING YOUR MODEL TO FAIL!")
-    else:
-        print("✅ Columns match perfectly")
+        print("\n[ERROR] Column mismatch detected!")
+        print(f"Train only: {train_cols - test_cols}")
+        print(f"Test only: {test_cols - train_cols}")
+        raise RuntimeError("Feature mismatch between train and test!")
     
-    print("🚨" * 40 + "\n")
+    print("\n[OK] Train and test have matching features")
+    print(f"[OK] Feature count: {len(train_cols) - 1} (+ Label)")
 
     # --------------------------------------------------------
     # SAVE
     # --------------------------------------------------------
     df_train_smote.to_csv(args.train_out, index=False)
-    df_test.to_csv(args.test_out, index=False)
+    df_test_clean.to_csv(args.test_out, index=False)
 
-    print("=" * 80)
+    print("\n" + "=" * 80)
     print("PREPROCESS_SUCCESS=true")
     print(f"TRAIN_SAMPLES={len(df_train_smote)}")
-    print(f"TEST_SAMPLES={len(df_test)}")
+    print(f"TEST_SAMPLES={len(df_test_clean)}")
     print(f"TRAIN_OUT={args.train_out}")
     print(f"TEST_OUT={args.test_out}")
     print("=" * 80)
