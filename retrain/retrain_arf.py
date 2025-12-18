@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 import subprocess
 from datetime import datetime, timezone
+import boto3
 
 
 from river import tree, metrics, drift
@@ -251,17 +252,16 @@ def main():
     if PROMOTE:
         ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-        with open("/tmp/last_retrain_ts.txt", "w") as f:
-            f.write(ts)
-
-        subprocess.check_call([
-            "aws", "s3", "cp",
-            "/tmp/last_retrain_ts.txt",
-            "s3://qmuit-training-data-store/cooldown/last_retrain_ts.txt"
-        ])
-
-        print(f"[COOLDOWN] Updated last retrain timestamp: {ts}")
-
+        try:
+            s3 = boto3.client("s3")
+            s3.put_object(
+                Bucket="qmuit-training-data-store",
+                Key="cooldown/last_retrain_ts.txt",
+                Body=ts.encode("utf-8")
+            )
+            print(f"[COOLDOWN] Updated last retrain timestamp: {ts}")
+        except Exception as e:
+            print(f"[WARN] Failed to update cooldown file: {e}")
 
     with open("/tmp/promote", "w") as f:
         f.write("true" if PROMOTE else "false")
