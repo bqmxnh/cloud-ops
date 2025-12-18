@@ -78,30 +78,17 @@ spec:
             - name: test
               from: "{{tasks.preprocess.outputs.artifacts.test}}"
 
-
-
-
-
-      
-
-
-      # # 3️⃣ MERGE BASE + DRIFT (7:3)
-      # - name: merge-data
-      #   dependencies: [fetch-drift]
-      #   template: merge-data
-
-      # # 4️⃣ PREPROCESS + SMOTE
-      # - name: preprocess
-      #   dependencies: [merge-data]
-      #   template: preprocess
-
-      # # 5️⃣ RETRAIN + EVALUATE (hold-out 80/20)
-      # - name: retrain
-      #   dependencies: [preprocess]
-      #   template: retrain
+      - name: register-model
+        dependencies: [retrain]
+        when: "{{tasks.retrain.outputs.parameters.promote}} == true"
+        template: register-model
+        arguments:
+          parameters:
+            - name: run_id
+              value: "{{tasks.retrain.outputs.parameters.run_id}}"
 
   # ============================================================
-  # TEMPLATE: CHECK DRIFT
+  # TEMPLATES
   # ============================================================
   - name: check-drift
     container:
@@ -132,13 +119,6 @@ spec:
           valueFrom:
             path: /tmp/drift_ts
 
-
-            
-
-
-  # ============================================================
-  # TEMPLATE: FETCH DRIFT
-  # ============================================================
   - name: fetch-drift
     inputs:
       parameters:
@@ -296,25 +276,27 @@ spec:
             --test /data/test_holdout.csv \
             --add-ratio 0.4
 
+    outputs:
+      parameters:
+        - name: promote
+          valueFrom:
+            path: /tmp/promote
+        - name: run_id
+          valueFrom:
+            path: /tmp/run_id
+
+  - name: register-model
+    inputs:
+      parameters:
+        - name: run_id
+    container:
+      image: bqmxnh/cloud-ops-retrain:latest
+      command: ["bash", "-c"]
+      args:
+        - |
+          echo "[STEP] REGISTER MODEL"
+          python /app/retrain/register_model.py \
+            --run-id {{inputs.parameters.run_id}}
 
 
 
-
-  # # ============================================================
-  # # TEMPLATE: RETRAIN + HOLD-OUT EVALUATION
-  # # ============================================================
-  # - name: retrain
-  #   container:
-  #     image: bqmxnh/cloud-ops-retrain:latest
-  #     resources:
-  #       requests:
-  #         memory: "4Gi"
-  #         cpu: "1"
-  #       limits:
-  #         memory: "8Gi"
-  #         cpu: "2"
-  #     command: ["bash", "-c"]
-  #     args:
-  #       - |
-  #         echo "[STEP] RETRAIN + EVALUATE (80/20 HOLD-OUT)"
-  #         python retrain/retrain_arf.py

@@ -235,7 +235,7 @@ def main():
         print(f"[MLFLOW] Run ID: {run_id}")
 
     # ============================================================
-    # DECISION: PROMOTE TO STAGING?
+    # OUTPUT DECISION FOR ARGO
     # ============================================================
     F1_THRESHOLD = 0.90
     KAPPA_THRESHOLD = 0.90
@@ -245,38 +245,15 @@ def main():
         kappa.get() >= KAPPA_THRESHOLD
     )
 
-    print(f"[DECISION] Promote to STAGING: {PROMOTE}")
+    with open("/tmp/promote", "w") as f:
+        f.write("true" if PROMOTE else "false")
 
-    if PROMOTE:
-        client = mlflow.tracking.MlflowClient()
+    with open("/tmp/run_id", "w") as f:
+        f.write(run_id)
 
-        model_uri = f"runs:/{run_id}"
+    print(f"[DECISION] PROMOTE={PROMOTE}")
+    print(f"RUN_ID={run_id}")
 
-        print("[MLFLOW] Registering model to Registry...")
-        result = client.create_model_version(
-            name=MODEL_NAME,
-            source=model_uri,
-            run_id=run_id
-        )
-
-        version = result.version
-        print(f"[MLFLOW] Created model version: {version}")
-
-        print("[MLFLOW] Transitioning model to STAGING...")
-        client.transition_model_version_stage(
-            name=MODEL_NAME,
-            version=version,
-            stage="Staging",
-            archive_existing_versions=True
-        )
-
-        print(f"[SUCCESS] Model version {version} promoted to STAGING 🚀")
-
-    else:
-        print(
-            "[SKIP] Model did NOT meet promotion criteria → "
-            "kept for analysis only"
-        )
 
 
 if __name__ == "__main__":
