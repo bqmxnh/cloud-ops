@@ -1,302 +1,310 @@
 apiVersion: argoproj.io/v1alpha1
-kind: Workflow
+kind: CronWorkflow
 metadata:
-  name: arf-incremental-retrain
+  name: arf-incremental-retrain-daily
 spec:
-  entrypoint: main
-  serviceAccountName: argo-workflows-workflow-controller
+  schedule: "0 3 * * *"          # 10h sáng VN
+  timezone: "Asia/Ho_Chi_Minh"   # (Khuyến nghị, nếu Argo >= v3.4)
+  concurrencyPolicy: "Forbid"    # Không cho chạy chồng
+  startingDeadlineSeconds: 600   # Miss ≤ 10 phút vẫn chạy
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
 
-  arguments:
-    parameters:
-      - name: hours
-        value: "24"
-      - name: delta
-        value: "0.002"
-      - name: window
-        value: "30"
-      - name: min_samples
-        value: "100"
+  workflowSpec:
+    entrypoint: main
+    serviceAccountName: argo-workflows-workflow-controller
 
-  templates:
-
-  # ============================================================
-  # MAIN DAG
-  # ============================================================
-  - name: main
-    dag:
-      tasks:
-
-      - name: check-drift
-        template: check-drift
-
-      - name: fetch-drift
-        dependencies: [check-drift]
-        when: "{{tasks.check-drift.outputs.parameters.drift}} == true"
-        template: fetch-drift
-        arguments:
-          parameters:
-            - name: drift_ts
-              value: "{{tasks.check-drift.outputs.parameters.drift_ts}}"
-
-      - name: save-drift
-        dependencies: [fetch-drift]
-        template: save-drift-dvc
-        arguments:
-          artifacts:
-            - name: drift_raw
-              from: "{{tasks.fetch-drift.outputs.artifacts.drift_raw}}"
-
-      - name: pull-base
-        dependencies: [fetch-drift]
-        template: pull-base-dvc
-
-      - name: merge-data
-        dependencies: [pull-base]
-        template: merge-data
-        arguments:
-          artifacts:
-            - name: drift_raw
-              from: "{{tasks.fetch-drift.outputs.artifacts.drift_raw}}"
-            - name: base
-              from: "{{tasks.pull-base.outputs.artifacts.base}}"
-
-      - name: preprocess
-        dependencies: [merge-data]
-        template: preprocess
-        arguments:
-          artifacts:
-            - name: merged
-              from: "{{tasks.merge-data.outputs.artifacts.merged}}"
-
-      - name: retrain
-        dependencies: [preprocess]
-        template: retrain
-        arguments:
-          artifacts:
-            - name: train
-              from: "{{tasks.preprocess.outputs.artifacts.train}}"
-            - name: test
-              from: "{{tasks.preprocess.outputs.artifacts.test}}"
-
-      - name: register-model
-        dependencies: [retrain]
-        when: "{{tasks.retrain.outputs.parameters.promote}} == true"
-        template: register-model
-        arguments:
-          parameters:
-            - name: run_id
-              value: "{{tasks.retrain.outputs.parameters.run_id}}"
-
-  # ============================================================
-  # TEMPLATES
-  # ============================================================
-  - name: check-drift
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] CHECK DRIFT"
-          python /app/retrain/check_drift.py \
-            --hours {{workflow.parameters.hours}} \
-            --delta {{workflow.parameters.delta}} \
-            --window {{workflow.parameters.window}} \
-            --min-samples {{workflow.parameters.min_samples}} \
-            | tee /tmp/check.log
-
-          if grep -q "DRIFT=true" /tmp/check.log; then
-            echo "true" > /tmp/drift
-            grep FIRST_DRIFT_TS /tmp/check.log | cut -d= -f2 > /tmp/drift_ts
-          else
-            echo "false" > /tmp/drift
-          fi
-    outputs:
+    arguments:
       parameters:
-        - name: drift
-          valueFrom:
-            path: /tmp/drift
-        - name: drift_ts
-          valueFrom:
-            path: /tmp/drift_ts
+        - name: hours
+          value: "24"
+        - name: delta
+          value: "0.002"
+        - name: window
+          value: "30"
+        - name: min_samples
+          value: "100"
 
-  - name: fetch-drift
-    inputs:
-      parameters:
-        - name: drift_ts
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] FETCH DRIFT"
-          python /app/retrain/fetch_prod.py \
-            --drift-ts {{inputs.parameters.drift_ts}} \
-            --output /data/drift_raw.csv
-    outputs:
-      artifacts:
-        - name: drift_raw
-          path: /data/drift_raw.csv
+    templates:
 
-  - name: save-drift-dvc
-    inputs:
-      artifacts:
-        - name: drift_raw
-          path: /data/drift_raw.csv
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] SAVE DRIFT DATA TO DVC"
+    # ============================================================
+    # MAIN DAG
+    # ============================================================
+    - name: main
+      dag:
+        tasks:
 
-          cd /app
+        - name: check-drift
+          template: check-drift
 
-          # Init DVC (no git, giống pull-base)
-          dvc init --no-scm -f
+        - name: fetch-drift
+          dependencies: [check-drift]
+          when: "{{tasks.check-drift.outputs.parameters.drift}} == true"
+          template: fetch-drift
+          arguments:
+            parameters:
+              - name: drift_ts
+                value: "{{tasks.check-drift.outputs.parameters.drift_ts}}"
 
-          # Add remote
-          dvc remote add -f trainingstore s3://qmuit-training-data-store
-          dvc remote default trainingstore
+        - name: save-drift
+          dependencies: [fetch-drift]
+          template: save-drift-dvc
+          arguments:
+            artifacts:
+              - name: drift_raw
+                from: "{{tasks.fetch-drift.outputs.artifacts.drift_raw}}"
 
-          # Copy drift data vào dataset folder
-          mkdir -p datasets/drift
-          cp /data/drift_raw.csv datasets/drift/drift_$(date +%s).csv
+        - name: pull-base
+          dependencies: [fetch-drift]
+          template: pull-base-dvc
 
-          # Track with DVC
-          dvc add datasets/drift/drift_*.csv
+        - name: merge-data
+          dependencies: [pull-base]
+          template: merge-data
+          arguments:
+            artifacts:
+              - name: drift_raw
+                from: "{{tasks.fetch-drift.outputs.artifacts.drift_raw}}"
+              - name: base
+                from: "{{tasks.pull-base.outputs.artifacts.base}}"
 
-          # Push to remote
-          dvc push
+        - name: preprocess
+          dependencies: [merge-data]
+          template: preprocess
+          arguments:
+            artifacts:
+              - name: merged
+                from: "{{tasks.merge-data.outputs.artifacts.merged}}"
 
-          echo "[OK] Drift data versioned in DVC"
+        - name: retrain
+          dependencies: [preprocess]
+          template: retrain
+          arguments:
+            artifacts:
+              - name: train
+                from: "{{tasks.preprocess.outputs.artifacts.train}}"
+              - name: test
+                from: "{{tasks.preprocess.outputs.artifacts.test}}"
+
+        - name: register-model
+          dependencies: [retrain]
+          when: "{{tasks.retrain.outputs.parameters.promote}} == true"
+          template: register-model
+          arguments:
+            parameters:
+              - name: run_id
+                value: "{{tasks.retrain.outputs.parameters.run_id}}"
+
+    # ============================================================
+    # TEMPLATES
+    # ============================================================
+    - name: check-drift
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] CHECK DRIFT"
+            python /app/retrain/check_drift.py \
+              --hours {{workflow.parameters.hours}} \
+              --delta {{workflow.parameters.delta}} \
+              --window {{workflow.parameters.window}} \
+              --min-samples {{workflow.parameters.min_samples}} \
+              | tee /tmp/check.log
+
+            if grep -q "DRIFT=true" /tmp/check.log; then
+              echo "true" > /tmp/drift
+              grep FIRST_DRIFT_TS /tmp/check.log | cut -d= -f2 > /tmp/drift_ts
+            else
+              echo "false" > /tmp/drift
+            fi
+      outputs:
+        parameters:
+          - name: drift
+            valueFrom:
+              path: /tmp/drift
+          - name: drift_ts
+            valueFrom:
+              path: /tmp/drift_ts
+
+    - name: fetch-drift
+      inputs:
+        parameters:
+          - name: drift_ts
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] FETCH DRIFT"
+            python /app/retrain/fetch_prod.py \
+              --drift-ts {{inputs.parameters.drift_ts}} \
+              --output /data/drift_raw.csv
+      outputs:
+        artifacts:
+          - name: drift_raw
+            path: /data/drift_raw.csv
+
+    - name: save-drift-dvc
+      inputs:
+        artifacts:
+          - name: drift_raw
+            path: /data/drift_raw.csv
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] SAVE DRIFT DATA TO DVC"
+
+            cd /app
+
+            # Init DVC (no git, giống pull-base)
+            dvc init --no-scm -f
+
+            # Add remote
+            dvc remote add -f trainingstore s3://qmuit-training-data-store
+            dvc remote default trainingstore
+
+            # Copy drift data vào dataset folder
+            mkdir -p datasets/drift
+            cp /data/drift_raw.csv datasets/drift/drift_$(date +%s).csv
+
+            # Track with DVC
+            dvc add datasets/drift/drift_*.csv
+
+            # Push to remote
+            dvc push
+
+            echo "[OK] Drift data versioned in DVC"
 
 
-  
-  - name: pull-base-dvc
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] DVC PULL BASE DATA (NO-SCM)"
+    
+    - name: pull-base-dvc
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] DVC PULL BASE DATA (NO-SCM)"
 
-          cd /app
+            cd /app
 
-          # Init DVC (no git)
-          dvc init --no-scm -f
+            # Init DVC (no git)
+            dvc init --no-scm -f
 
-          # ADD REMOTE (BẮT BUỘC)
-          dvc remote add -f trainingstore s3://qmuit-training-data-store
+            # ADD REMOTE (BẮT BUỘC)
+            dvc remote add -f trainingstore s3://qmuit-training-data-store
 
-          # OPTIONAL: set default remote
-          dvc remote default trainingstore
+            # OPTIONAL: set default remote
+            dvc remote default trainingstore
 
-          # PULL FILE TRACKED
-          dvc pull datasets/base/base.csv.dvc
+            # PULL FILE TRACKED
+            dvc pull datasets/base/base.csv.dvc
 
-          ls -lh datasets/base/
-
-
-    outputs:
-      artifacts:
-        - name: base
-          path: /app/datasets/base/base.csv
-
-  - name: merge-data
-    inputs:
-      artifacts:
-        - name: drift_raw
-          path: /data/drift_raw.csv
-        - name: base
-          path: /app/datasets/base/base.csv
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] MERGE BASE + DRIFT (7:3, streaming)"
-
-          python /app/retrain/merge_data.py \
-            --drift /data/drift_raw.csv \
-            --base /app/datasets/base/base.csv \
-            --output /data/drift_merged.csv
-    outputs:
-      artifacts:
-        - name: merged
-          path: /data/drift_merged.csv
+            ls -lh datasets/base/
 
 
-  - name: preprocess
-    inputs:
-      artifacts:
-        - name: merged
-          path: /data/drift_merged.csv
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] PREPROCESS (SMOTE + 80/20)"
+      outputs:
+        artifacts:
+          - name: base
+            path: /app/datasets/base/base.csv
 
-          python /app/retrain/preprocess.py \
-            --input /data/drift_merged.csv \
-            --train-out /data/train_smote.csv \
-            --test-out /data/test_holdout.csv
-    outputs:
-      artifacts:
-        - name: train
-          path: /data/train_smote.csv
-        - name: test
-          path: /data/test_holdout.csv
+    - name: merge-data
+      inputs:
+        artifacts:
+          - name: drift_raw
+            path: /data/drift_raw.csv
+          - name: base
+            path: /app/datasets/base/base.csv
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] MERGE DATA"
+
+            python /app/retrain/merge_data.py \
+              --drift /data/drift_raw.csv \
+              --base /app/datasets/base/base.csv \
+              --output /data/drift_merged.csv
+      outputs:
+        artifacts:
+          - name: merged
+            path: /data/drift_merged.csv
 
 
-  - name: retrain
-    inputs:
-      artifacts:
-        - name: train
-          path: /data/train_smote.csv
-        - name: test
-          path: /data/test_holdout.csv
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      resources:
-        requests:
-          memory: "4Gi"
-          cpu: "1"
-        limits:
-          memory: "8Gi"
-          cpu: "2"
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] RETRAIN + HOLD-OUT EVALUATION"
+    - name: preprocess
+      inputs:
+        artifacts:
+          - name: merged
+            path: /data/drift_merged.csv
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] PREPROCESS"
 
-          python /app/retrain/retrain_arf.py \
-            --train /data/train_smote.csv \
-            --test /data/test_holdout.csv \
-            --add-ratio 0.4
+            python /app/retrain/preprocess.py \
+              --input /data/drift_merged.csv \
+              --train-out /data/train_smote.csv \
+              --test-out /data/test_holdout.csv
+      outputs:
+        artifacts:
+          - name: train
+            path: /data/train_smote.csv
+          - name: test
+            path: /data/test_holdout.csv
 
-    outputs:
-      parameters:
-        - name: promote
-          valueFrom:
-            path: /tmp/promote
-        - name: run_id
-          valueFrom:
-            path: /tmp/run_id
 
-  - name: register-model
-    inputs:
-      parameters:
-        - name: run_id
-    container:
-      image: bqmxnh/cloud-ops-retrain:latest
-      command: ["bash", "-c"]
-      args:
-        - |
-          echo "[STEP] REGISTER MODEL"
-          python /app/retrain/register_model.py \
-            --run-id {{inputs.parameters.run_id}}
+    - name: retrain
+      inputs:
+        artifacts:
+          - name: train
+            path: /data/train_smote.csv
+          - name: test
+            path: /data/test_holdout.csv
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "1"
+          limits:
+            memory: "8Gi"
+            cpu: "2"
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] RETRAIN"
+
+            python /app/retrain/retrain_arf.py \
+              --train /data/train_smote.csv \
+              --test /data/test_holdout.csv \
+              --add-ratio 0.4
+
+      outputs:
+        parameters:
+          - name: promote
+            valueFrom:
+              path: /tmp/promote
+          - name: run_id
+            valueFrom:
+              path: /tmp/run_id
+
+    - name: register-model
+      inputs:
+        parameters:
+          - name: run_id
+      container:
+        image: bqmxnh/cloud-ops-retrain:latest
+        command: ["bash", "-c"]
+        args:
+          - |
+            echo "[STEP] REGISTER MODEL"
+            python /app/retrain/register_model.py \
+              --run-id {{inputs.parameters.run_id}}
 
 
 
