@@ -20,7 +20,7 @@ EXIT_NO_DRIFT = 10
 EXIT_NOT_ENOUGH = 11
 EXIT_DRIFT = 0
 
-COOLDOWN_HOURS = 24
+COOLDOWN_HOURS = 0
 S3_COOLDOWN_URI = "s3://qmuit-training-data-store/cooldown/last_retrain_ts.txt"
 LOCAL_COOLDOWN_FILE = "/tmp/last_retrain_ts.txt"
 
