@@ -9,7 +9,8 @@ from boto3.dynamodb.conditions import Attr
 # ============================================================
 TABLE_NAME = "ids_log_system"
 REGION = "us-east-1"
-MAX_SAMPLES = 400
+MAX_SAMPLES = 10000
+
 
 # ============================================================
 # ARGS
@@ -17,7 +18,8 @@ MAX_SAMPLES = 400
 def parse_args():
     ap = argparse.ArgumentParser("Fetch drift samples from DynamoDB")
     ap.add_argument("--drift-ts", type=int, required=True, help="FIRST_DRIFT_TS (ms)")
-    ap.add_argument("--output", default="/data/drift_raw.csv")
+    ap.add_argument("--end-ts", type=int, required=True, help="SECOND_DRIFT_TS (ms)")
+    ap.add_argument("--output", default="/data/drift_raw.csv", help="Output CSV file path")
     return ap.parse_args()
 
 # ============================================================
@@ -25,10 +27,6 @@ def parse_args():
 # ============================================================
 def main():
     args = parse_args()
-    drift_ts = args.drift_ts
-
-    print(f"[INFO] Fetching samples from drift_ts >= {drift_ts}")
-    print(f"[INFO] Max samples: {MAX_SAMPLES}")
 
     dynamodb = boto3.resource("dynamodb", region_name=REGION)
     table = dynamodb.Table(TABLE_NAME)
@@ -36,7 +34,8 @@ def main():
     items = []
     scan_kwargs = {
         "FilterExpression": (
-            Attr("timestamp").gte(drift_ts) &
+            Attr("timestamp").gte(args.drift_ts) &
+            Attr("timestamp").lte(args.end_ts) &
             Attr("true_label").ne("unknown")
         )
     }
@@ -48,37 +47,18 @@ def main():
             break
         scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
-    if not items:
-        print("[WARN] No samples found after drift")
-        print("FETCH_SUCCESS=false")
-        exit(10)
-
-    # Sort ASC by timestamp
     items.sort(key=lambda x: int(x["timestamp"]))
+    items = items[:MAX_SAMPLES]
 
-    selected = items[:MAX_SAMPLES]
-
-    print(f"[INFO] Selected samples: {len(selected)}")
-
-    # --------------------------------------------------------
-    # WRITE CSV
-    # --------------------------------------------------------
     with open(args.output, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["features_json", "true_label"])
+        for it in items:
+            writer.writerow([it.get("features_json", "{}"), it["true_label"]])
 
-        for it in selected:
-            writer.writerow([
-                it.get("features_json", "{}"),
-                str(it.get("true_label", "")).upper()
-            ])
-
-    print("=" * 80)
     print("FETCH_SUCCESS=true")
-    print(f"SAMPLES={len(selected)}")
-    print(f"OUTPUT={args.output}")
-    print("=" * 80)
-    exit(0)
+    print(f"SAMPLES={len(items)}")
+
 
 if __name__ == "__main__":
     main()
