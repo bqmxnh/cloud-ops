@@ -9,9 +9,9 @@ import subprocess
 from datetime import datetime, timezone
 import boto3
 
-
 from river import tree, metrics, drift
 import mlflow
+
 
 # ============================================================
 # ARGS
@@ -23,6 +23,7 @@ def parse_args():
     ap.add_argument("--add-ratio", type=float, default=0.4)
     ap.add_argument("--seed", type=int, default=42)
     return ap.parse_args()
+
 
 # ============================================================
 # CONFIG
@@ -41,6 +42,7 @@ BEST_PARAMS = {
     "disable_weighted_vote": True
 }
 
+
 # ============================================================
 # MLFLOW
 # ============================================================
@@ -50,10 +52,12 @@ MODEL_STAGE = "Production"
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
+
 def load_from_registry(model_name, stage):
     uri = f"models:/{model_name}/{stage}"
     print(f"[MLFLOW] Loading model from {uri}")
     return mlflow.artifacts.download_artifacts(uri)
+
 
 # ============================================================
 # MAIN
@@ -63,7 +67,7 @@ def main():
     random.seed(args.seed)
 
     # --------------------------------------------------------
-    # LOAD MODEL + PREPROCESSORS (FROM PRODUCTION)
+    # LOAD PRODUCTION MODEL + PREPROCESSORS
     # --------------------------------------------------------
     artifact_dir = load_from_registry(MODEL_NAME, MODEL_STAGE)
 
@@ -76,7 +80,7 @@ def main():
     print(f"✔ Classes: {encoder.classes_}")
 
     # --------------------------------------------------------
-    # LOAD DATA (ALREADY SPLIT + SMOTE)
+    # LOAD DATA
     # --------------------------------------------------------
     df_train = pd.read_csv(args.train)
     df_test = pd.read_csv(args.test)
@@ -84,7 +88,7 @@ def main():
     df_train["Label"] = encoder.transform(df_train["Label"])
     df_test["Label"] = encoder.transform(df_test["Label"])
 
-    print(f"\n[SPLIT]")
+    print("\n[SPLIT]")
     print(f"✔ Train: {len(df_train)}")
     print(f"✔ Test : {len(df_test)}")
 
@@ -97,17 +101,16 @@ def main():
     num_old = len(model.models)
     num_add = int(num_old * args.add_ratio)
 
-    print(f"\n[MODEL] Adding {num_add} new trees ({int(args.add_ratio*100)}%)")
+    print(f"\n[MODEL] Adding {num_add} new trees ({int(args.add_ratio * 100)}%)")
 
     def create_new_tree(params):
-        """Create new Hoeffding Tree with best params"""
         return tree.HoeffdingTreeClassifier(
             grace_period=params["grace_period"],
             split_criterion=params["split_criterion"],
             leaf_prediction=params["leaf_prediction"],
             binary_split=params["binary_split"],
             max_depth=params["max_depth"]
-    )
+        )
 
     for _ in range(num_add):
         model.models.append(create_new_tree(BEST_PARAMS))
@@ -149,116 +152,92 @@ def main():
     print(f"\n[DONE] Training completed in {time.time() - t0:.2f}s")
 
     # --------------------------------------------------------
-    # EVALUATION (HOLD-OUT TEST)
+    # EVALUATION — NEW MODEL
     # --------------------------------------------------------
-    print("\n[EVAL] Evaluating on TEST set...")
+    print("\n[EVAL] Evaluating NEW model...")
 
-    acc = metrics.Accuracy()
-    prec = metrics.Precision()
-    rec = metrics.Recall()
-    f1 = metrics.F1()
-    kappa = metrics.CohenKappa()
-
-    tp = tn = fp = fn = 0
+    f1_new = metrics.F1()
+    kappa_new = metrics.CohenKappa()
 
     for _, row in df_test.iterrows():
         x = {k: row[k] for k in FEATURE_ORDER}
         y = row["Label"]
 
-        x_scaled = scaler.transform_one(x)
-        y_pred = model.predict_one(x_scaled)
+        y_pred = model.predict_one(scaler.transform_one(x))
+        if y_pred is not None:
+            f1_new.update(y, y_pred)
+            kappa_new.update(y, y_pred)
 
-        if y_pred is None:
-            continue
-
-        acc.update(y, y_pred)
-        prec.update(y, y_pred)
-        rec.update(y, y_pred)
-        f1.update(y, y_pred)
-        kappa.update(y, y_pred)
-
-        if y == 0 and y_pred == 0: tp += 1
-        elif y == 1 and y_pred == 1: tn += 1
-        elif y == 1 and y_pred == 0: fp += 1
-        elif y == 0 and y_pred == 1: fn += 1
-
-    print("\n[RESULTS]")
-    print(f"F1-score        : {f1.get():.4f}")
-    print(f"Accuracy        : {acc.get():.4f}")
-    print(f"Precision       : {prec.get():.4f}")
-    print(f"Recall          : {rec.get():.4f}")
-    print(f"Cohen's Kappa   : {kappa.get():.4f}")
-    print("\n[CONFUSION MATRIX]")
-    print(f"TP: {tp} | FP: {fp}")
-    print(f"FN: {fn} | TN: {tn}")
+    print(f"NEW  F1     : {f1_new.get():.4f}")
+    print(f"NEW  KAPPA  : {kappa_new.get():.4f}")
 
     # --------------------------------------------------------
-    # SAVE FOR MLFLOW STAGING
+    # EVALUATION — PRODUCTION MODEL (SAME TEST SET)
+    # --------------------------------------------------------
+    print("\n[EVAL] Evaluating PRODUCTION model...")
+
+    f1_prod = metrics.F1()
+    kappa_prod = metrics.CohenKappa()
+
+    for _, row in df_test.iterrows():
+        x = {k: row[k] for k in FEATURE_ORDER}
+        y = row["Label"]
+
+        y_pred = model_base.predict_one(scaler.transform_one(x))
+        if y_pred is not None:
+            f1_prod.update(y, y_pred)
+            kappa_prod.update(y, y_pred)
+
+    print(f"PROD F1     : {f1_prod.get():.4f}")
+    print(f"PROD KAPPA  : {kappa_prod.get():.4f}")
+
+    # --------------------------------------------------------
+    # SAVE ARTIFACTS
     # --------------------------------------------------------
     joblib.dump(model, "model.pkl")
     joblib.dump(scaler, "scaler.pkl")
     joblib.dump(encoder, "label_encoder.pkl")
     joblib.dump(FEATURE_ORDER, "feature_order.pkl")
 
-    print("\n[OK] Retrained model artifacts saved")
-
-    # ============================================================
-    # MLFLOW LOG + REGISTER
-    # ============================================================
-    print("\n[MLFLOW] Logging retrained model...")
-
+    # --------------------------------------------------------
+    # MLFLOW LOGGING
+    # --------------------------------------------------------
     with mlflow.start_run(run_name="arf-incremental-retrain") as run:
-        # -------------------------------
-        # LOG METRICS
-        # -------------------------------
-        mlflow.log_metric("f1", f1.get())
-        mlflow.log_metric("accuracy", acc.get())
-        mlflow.log_metric("precision", prec.get())
-        mlflow.log_metric("recall", rec.get())
-        mlflow.log_metric("kappa", kappa.get())
+        mlflow.log_metric("f1_new", f1_new.get())
+        mlflow.log_metric("kappa_new", kappa_new.get())
+        mlflow.log_metric("f1_prod", f1_prod.get())
+        mlflow.log_metric("kappa_prod", kappa_prod.get())
+        mlflow.log_metric("f1_gain", f1_new.get() - f1_prod.get())
+        mlflow.log_metric("kappa_gain", kappa_new.get() - kappa_prod.get())
 
-        # -------------------------------
-        # LOG PARAMS
-        # -------------------------------
         mlflow.log_param("add_ratio", args.add_ratio)
         mlflow.log_param("n_trees_before", num_old)
         mlflow.log_param("n_trees_after", len(model.models))
-        mlflow.log_param("drift_confidence", BEST_PARAMS["drift_confidence"])
-        mlflow.log_param("retrain_type", "incremental_arf")
         mlflow.log_param("source_stage", "Production")
 
-        # -------------------------------
-        # LOG ARTIFACTS
-        # -------------------------------
         mlflow.log_artifact("model.pkl")
         mlflow.log_artifact("scaler.pkl")
         mlflow.log_artifact("label_encoder.pkl")
         mlflow.log_artifact("feature_order.pkl")
 
         run_id = run.info.run_id
-        print(f"[MLFLOW] Run ID: {run_id}")
 
-    # ============================================================
-    # OUTPUT DECISION FOR ARGO
-    # ============================================================
-    F1_THRESHOLD = 0.90
-    KAPPA_THRESHOLD = 0.90
-
+    # --------------------------------------------------------
+    # PROMOTION DECISION (NO HARD THRESHOLD)
+    # --------------------------------------------------------
     PROMOTE = (
-        f1.get() >= F1_THRESHOLD and
-        kappa.get() >= KAPPA_THRESHOLD
+        f1_new.get() > f1_prod.get() and
+        kappa_new.get() > kappa_prod.get()
     )
 
     if PROMOTE:
         ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
         s3 = boto3.client("s3")
         s3.put_object(
             Bucket="qmuit-training-data-store",
             Key="cooldown/last_retrain_ts.txt",
             Body=ts.encode("utf-8")
         )
-
         print(f"[STATE] last_retrain_ts updated = {ts}")
 
 
