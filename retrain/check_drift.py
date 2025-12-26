@@ -29,7 +29,7 @@ LOCAL_COOLDOWN_FILE = "/tmp/last_retrain_ts.txt"
 # ARGUMENTS
 # ============================================================
 def parse_args():
-    ap = argparse.ArgumentParser("Drift Detection with ADWIN + Trend Confirmation")
+    ap = argparse.ArgumentParser("Drift Detection with ADWIN (2-phase)")
     ap.add_argument("--hours", type=int, default=24, help="Lookback window (hours)")
     ap.add_argument("--delta", type=float, default=0.0002, help="ADWIN delta")
     ap.add_argument("--min-samples", type=int, default=100, help="Minimum labeled samples")
@@ -51,15 +51,12 @@ def load_last_retrain_ts():
         return None
 
 
-
 def can_retrain():
-    last_retrain_ts = load_last_retrain_ts()
-    if last_retrain_ts is None:
+    last = load_last_retrain_ts()
+    if last is None:
         return True
-
-    hours = (datetime.now(timezone.utc) - last_retrain_ts).total_seconds() / 3600
-    return hours >= COOLDOWN_HOURS
-
+    diff = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+    return diff >= COOLDOWN_HOURS
 
 
 # ============================================================
@@ -70,7 +67,6 @@ def main():
 
     now = datetime.now(timezone.utc)
     start_ts = int((now - timedelta(hours=args.hours)).timestamp() * 1000)
-
     print(f"[INFO] Lookback window : {args.hours} hours")
     print(f"[INFO] Start timestamp : {start_ts}")
     print(f"[INFO] ADWIN delta     : {args.delta}")
@@ -114,83 +110,50 @@ def main():
     K = args.window
     err_buffer = deque(maxlen=2 * K)
 
-    negative_drift_ts = None
+    in_drift = False
+    first_drift_ts = None
+    second_drift_ts = None
 
-    if args.debug:
-        print("=" * 110)
-        print("idx | timestamp        | pred -> true | err | width | est   | ADWIN | NEG")
-        print("=" * 110)
-
-    for i, it in enumerate(items):
+    for it in items:
         ts = int(it["timestamp"])
-        pred = it["label"]
-        true = it["true_label"]
+        err = 1 if it["label"] != it["true_label"] else 0
 
-        err = 1 if pred != true else 0
         err_buffer.append(err)
         adwin.update(err)
 
-        neg_drift = False
-
         if adwin.drift_detected and len(err_buffer) == 2 * K:
-            past_err = sum(list(err_buffer)[:K]) / K
-            recent_err = sum(list(err_buffer)[K:]) / K
-            global_err = adwin.estimation
+            past = sum(list(err_buffer)[:K]) / K
+            recent = sum(list(err_buffer)[K:]) / K
+            est = adwin.estimation
 
-            if recent_err > past_err and recent_err > global_err:
-                neg_drift = True
-                negative_drift_ts = ts
+            # Drift start (error ↑)
+            if not in_drift and recent > past and recent > est:
+                first_drift_ts = ts
+                in_drift = True
 
-        if args.debug:
-            print(
-                f"{i:03d} | {ts} | "
-                f"{pred:6s}->{true:6s} | "
-                f"{err}   | "
-                f"{int(adwin.width):5d} | "
-                f"{adwin.estimation:5.3f} | "
-                f"{str(adwin.drift_detected):5s} | "
-                f"{neg_drift}"
-            )
+            # Drift end (error ↓)
+            elif in_drift and recent < past and recent < est:
+                second_drift_ts = ts
+                break
 
-        if neg_drift:
-            break
-
-    # --------------------------------------------------------
-    # RESULT
-    # --------------------------------------------------------
-    print("=" * 80)
-    print(f"TOTAL_SAMPLES={len(items)}")
-
-    if negative_drift_ts is not None:
+    if first_drift_ts:
         print("DRIFT=true")
-        print("DRIFT_TYPE=NEGATIVE")
-        print(f"FIRST_DRIFT_TS={negative_drift_ts}")
-
-        last_retrain_ts = load_last_retrain_ts()
-
-        if last_retrain_ts is not None:
-            last_retrain_ms = int(last_retrain_ts.timestamp() * 1000)
-
-            if negative_drift_ts <= last_retrain_ms:
-                print("RETRAIN=false")
-                print("REASON=DRIFT_ALREADY_HANDLED")
-                sys.exit(EXIT_NO_DRIFT)
-
-
+        print(f"FIRST_DRIFT_TS={first_drift_ts}")
+        if second_drift_ts:
+            print(f"SECOND_DRIFT_TS={second_drift_ts}")
+        else:
+            # fallback: end at latest observed timestamp
+            print(f"SECOND_DRIFT_TS={items[-1]['timestamp']}")
         if can_retrain():
             print("RETRAIN=true")
             sys.exit(EXIT_DRIFT)
         else:
             print("RETRAIN=false")
-            print("REASON=COOLDOWN_ACTIVE")
             sys.exit(EXIT_NO_DRIFT)
 
-
-    else:
-        print("DRIFT=false")
-        print("RETRAIN=false")
-        sys.exit(EXIT_NO_DRIFT)
-
+    print("DRIFT=false")
+    print("RETRAIN=false")
+    sys.exit(EXIT_NO_DRIFT)
 
 
 if __name__ == "__main__":
