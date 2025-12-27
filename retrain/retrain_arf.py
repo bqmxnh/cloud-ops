@@ -4,6 +4,7 @@ import pandas as pd
 import joblib
 import random
 import time
+import copy
 from pathlib import Path
 import subprocess
 from datetime import datetime, timezone
@@ -78,6 +79,13 @@ def main():
 
     print(f"✔ Trees before retrain: {len(model_base.models)}")
     print(f"✔ Classes: {encoder.classes_}")
+
+    # --------------------------------------------------------
+    # DEEP COPY PRODUCTION MODEL FOR BASELINE COMPARISON
+    # --------------------------------------------------------
+    print("\n[COPY] Creating production baseline snapshot...")
+    model_prod_snapshot = copy.deepcopy(model_base)
+    print(f"✔ Baseline snapshot has {len(model_prod_snapshot.models)} trees")
 
     # --------------------------------------------------------
     # LOAD DATA
@@ -172,9 +180,9 @@ def main():
     print(f"NEW  KAPPA  : {kappa_new.get():.4f}")
 
     # --------------------------------------------------------
-    # EVALUATION — PRODUCTION MODEL (SAME TEST SET)
+    # EVALUATION — PRODUCTION MODEL (BASELINE SNAPSHOT)
     # --------------------------------------------------------
-    print("\n[EVAL] Evaluating PRODUCTION model...")
+    print("\n[EVAL] Evaluating PRODUCTION model (baseline)...")
 
     f1_prod = metrics.F1()
     kappa_prod = metrics.CohenKappa()
@@ -183,13 +191,24 @@ def main():
         x = {k: row[k] for k in FEATURE_ORDER}
         y = row["Label"]
 
-        y_pred = model_base.predict_one(scaler.transform_one(x))
+        # Use the untouched snapshot for fair comparison
+        y_pred = model_prod_snapshot.predict_one(scaler.transform_one(x))
         if y_pred is not None:
             f1_prod.update(y, y_pred)
             kappa_prod.update(y, y_pred)
 
     print(f"PROD F1     : {f1_prod.get():.4f}")
     print(f"PROD KAPPA  : {kappa_prod.get():.4f}")
+
+    # --------------------------------------------------------
+    # COMPARISON
+    # --------------------------------------------------------
+    f1_gain = f1_new.get() - f1_prod.get()
+    kappa_gain = kappa_new.get() - kappa_prod.get()
+
+    print("\n[COMPARISON]")
+    print(f"F1 Gain     : {f1_gain:+.4f}")
+    print(f"KAPPA Gain  : {kappa_gain:+.4f}")
 
     # --------------------------------------------------------
     # SAVE ARTIFACTS
@@ -207,8 +226,8 @@ def main():
         mlflow.log_metric("kappa_new", kappa_new.get())
         mlflow.log_metric("f1_prod", f1_prod.get())
         mlflow.log_metric("kappa_prod", kappa_prod.get())
-        mlflow.log_metric("f1_gain", f1_new.get() - f1_prod.get())
-        mlflow.log_metric("kappa_gain", kappa_new.get() - kappa_prod.get())
+        mlflow.log_metric("f1_gain", f1_gain)
+        mlflow.log_metric("kappa_gain", kappa_gain)
 
         mlflow.log_param("add_ratio", args.add_ratio)
         mlflow.log_param("n_trees_before", num_old)
@@ -223,7 +242,7 @@ def main():
         run_id = run.info.run_id
 
     # --------------------------------------------------------
-    # PROMOTION DECISION (NO HARD THRESHOLD)
+    # PROMOTION DECISION
     # --------------------------------------------------------
     PROMOTE = (
         f1_new.get() > f1_prod.get() and
@@ -238,8 +257,7 @@ def main():
             Key="cooldown/last_retrain_ts.txt",
             Body=ts.encode("utf-8")
         )
-        print(f"[STATE] last_retrain_ts updated = {ts}")
-
+        print(f"\n[STATE] last_retrain_ts updated = {ts}")
 
     with open("/tmp/promote", "w") as f:
         f.write("true" if PROMOTE else "false")
@@ -247,9 +265,8 @@ def main():
     with open("/tmp/run_id", "w") as f:
         f.write(run_id)
 
-    print(f"[DECISION] PROMOTE={PROMOTE}")
-    print(f"RUN_ID={run_id}")
-
+    print(f"\n[DECISION] PROMOTE={PROMOTE}")
+    print(f"[OUTPUT] RUN_ID={run_id}")
 
 
 if __name__ == "__main__":
