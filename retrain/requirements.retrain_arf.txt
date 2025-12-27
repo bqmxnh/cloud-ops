@@ -11,3 +11,4 @@ botocore>=1.34,<2.0
 
 pyarrow
 s3fs
+awscli
