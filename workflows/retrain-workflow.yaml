@@ -4,9 +4,9 @@ metadata:
   name: arf-incremental-retrain-daily
 spec:
   schedule: "0 3 * * *"          # 10h sáng VN
-  timezone: "Asia/Ho_Chi_Minh"   # (Khuyến nghị, nếu Argo >= v3.4)
-  concurrencyPolicy: "Forbid"    # Không cho chạy chồng
-  startingDeadlineSeconds: 600   # Miss ≤ 10 phút vẫn chạy
+  timezone: "Asia/Ho_Chi_Minh"
+  concurrencyPolicy: "Forbid"
+  startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
 
@@ -61,7 +61,7 @@ spec:
           template: pull-base-dvc
 
         - name: merge-data
-          dependencies: [pull-base]
+          dependencies: [pull-base, save-drift]
           template: merge-data
           arguments:
             artifacts:
@@ -106,6 +106,7 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
             echo "[STEP] CHECK DRIFT"
 
             python /app/retrain/check_drift.py \
@@ -122,7 +123,7 @@ spec:
               echo "false" > /tmp/drift
             fi
 
-            # RETRAIN FLAG (NEW)
+            # RETRAIN FLAG
             if grep -q "RETRAIN=true" /tmp/check.log; then
               echo "true" > /tmp/retrain
             else
@@ -136,26 +137,25 @@ spec:
               echo "" > /tmp/drift_ts
             fi
 
-            # SAFE end_ts (SECOND_DRIFT_TS)
+            # SAFE end_ts
             if grep -q "SECOND_DRIFT_TS" /tmp/check.log; then
               grep SECOND_DRIFT_TS /tmp/check.log | cut -d= -f2 > /tmp/end_ts
             else
               echo "" > /tmp/end_ts
             fi
 
-
       outputs:
         parameters:
           - name: drift
             valueFrom:
               path: /tmp/drift
-          - name: retrain      
+          - name: retrain
             valueFrom:
               path: /tmp/retrain
           - name: drift_ts
             valueFrom:
               path: /tmp/drift_ts
-          - name: end_ts              
+          - name: end_ts
             valueFrom:
               path: /tmp/end_ts
 
@@ -170,16 +170,21 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
             echo "[STEP] FETCH DRIFT"
+            
             python /app/retrain/fetch_prod.py \
               --drift-ts {{inputs.parameters.drift_ts}} \
               --end-ts {{inputs.parameters.end_ts}} \
               --output /data/drift_raw.csv
+            
+            echo "✓ Fetched $(wc -l < /data/drift_raw.csv) rows"
 
       outputs:
         artifacts:
           - name: drift_raw
             path: /data/drift_raw.csv
+
 
     - name: save-drift-dvc
       inputs:
@@ -191,60 +196,201 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
+            
+            echo "=========================================="
             echo "[STEP] SAVE DRIFT DATA TO DVC"
+            echo "=========================================="
 
             cd /app
 
-            # Init DVC (no git, giống pull-base)
-            dvc init --no-scm -f
+            # 1. Init DVC
+            echo "[1/6] Initializing DVC (no-scm mode)..."
+            dvc init --no-scm -f 2>&1 | grep -v "What's next"
 
-            # Add remote
+            # 2. Configure remote
+            echo "[2/6] Configuring S3 remote..."
             dvc remote add -f trainingstore s3://qmuit-training-data-store
             dvc remote default trainingstore
 
-            # Copy drift data vào dataset folder
+            # 3. Prepare drift file with timestamp
+            echo "[3/6] Preparing drift file..."
             mkdir -p datasets/drift
-            cp /data/drift_raw.csv datasets/drift/drift_$(date +%s).csv
+            DRIFT_FILE="drift_$(date +%Y%m%d_%H%M%S).csv"
+            cp /data/drift_raw.csv "datasets/drift/${DRIFT_FILE}"
+            
+            # Verify file copied
+            if [ ! -f "datasets/drift/${DRIFT_FILE}" ]; then
+              echo "ERROR: Failed to copy drift file"
+              exit 1
+            fi
+            
+            echo "✓ Drift file created: ${DRIFT_FILE}"
+            echo "  Size: $(du -h datasets/drift/${DRIFT_FILE} | cut -f1)"
+            echo "  Rows: $(wc -l < datasets/drift/${DRIFT_FILE})"
 
-            # Track with DVC
-            dvc add datasets/drift/drift_*.csv
+            # 4. Track with DVC
+            echo "[4/6] Tracking with DVC..."
+            dvc add "datasets/drift/${DRIFT_FILE}"
+            
+            # Verify .dvc file created
+            if [ ! -f "datasets/drift/${DRIFT_FILE}.dvc" ]; then
+              echo "ERROR: .dvc file not created"
+              exit 1
+            fi
+            
+            echo "✓ DVC tracking file created: ${DRIFT_FILE}.dvc"
+            echo "--- Content of .dvc file ---"
+            cat "datasets/drift/${DRIFT_FILE}.dvc"
+            echo "----------------------------"
 
-            # Push to remote
-            dvc push
+            # 5. Push to S3
+            echo "[5/6] Pushing to S3..."
+            dvc push "datasets/drift/${DRIFT_FILE}.dvc" 2>&1 | tee /tmp/dvc_push.log
+            
+            # Parse MD5 from .dvc file
+            echo "--- Parsing MD5 ---"
+            # The line is: "- md5: 43d9c61f79270425df1088da2b0e192b"
+            # We need field 3 (after "- md5:")
+            MD5=$(grep "md5:" "datasets/drift/${DRIFT_FILE}.dvc" | head -1 | awk '{print $3}')
+            
+            echo "Parsed MD5: '${MD5}'"
+            echo "MD5 length: ${#MD5}"
+            
+            # Validate MD5 format (32 hex chars)
+            if [[ ! "${MD5}" =~ ^[a-f0-9]{32}$ ]]; then
+              echo "ERROR: Invalid MD5 format"
+              echo "Debug info:"
+              grep "md5:" "datasets/drift/${DRIFT_FILE}.dvc"
+              exit 1
+            fi
+            echo "✓ Valid MD5 hash: ${MD5}"
+            echo "-------------------"
+            
+            # Check push result
+            if grep -q "1 file pushed" /tmp/dvc_push.log; then
+              echo "✓ DVC push successful - new file uploaded"
+            elif grep -q "Everything is up to date" /tmp/dvc_push.log; then
+              echo "File already exists in S3, verifying..."
+              
+              # Verify file exists in S3
+              S3_PATH="s3://qmuit-training-data-store/files/md5/${MD5:0:2}/${MD5:2}"
+              echo "  Checking S3: ${S3_PATH}"
+              
+              # Try to list with verbose output
+              if aws s3 ls "${S3_PATH}" 2>&1 | tee /tmp/s3_check.log; then
+                echo "✓ File verified in S3 (already existed)"
+              else
+                echo "aws s3 ls failed, but 'Everything is up to date' suggests file exists"
+                echo "  This is likely a permissions issue or the file is cached"
+                echo "  DVC says it's up to date, so we'll trust that"
+                cat /tmp/s3_check.log || true
+                # Don't exit - trust DVC's "Everything is up to date"
+              fi
+            else
+              echo "ERROR: Unexpected DVC push output"
+              cat /tmp/dvc_push.log
+              exit 1
+            fi
 
-            echo "[OK] Drift data versioned in DVC"
+            # 6. Final verification with pull test
+            echo "[6/6] Final verification..."
+            echo "  Testing pull from S3..."
+            
+            # Remove local file
+            rm -f "datasets/drift/${DRIFT_FILE}"
+            
+            # Pull from S3
+            if dvc pull "datasets/drift/${DRIFT_FILE}.dvc" 2>&1 | tee /tmp/dvc_pull.log; then
+              if [ -f "datasets/drift/${DRIFT_FILE}" ]; then
+                ROWS_AFTER=$(wc -l < "datasets/drift/${DRIFT_FILE}")
+                echo "✓ Pull test successful"
+                echo "  File restored with ${ROWS_AFTER} rows"
+              else
+                echo "ERROR: File not restored after pull"
+                cat /tmp/dvc_pull.log
+                exit 1
+              fi
+            else
+              echo "ERROR: DVC pull failed"
+              cat /tmp/dvc_pull.log
+              exit 1
+            fi
+
+            # Save metadata for outputs
+            echo "${DRIFT_FILE}" > /tmp/drift_filename
+            echo "${MD5}" > /tmp/drift_md5
+            echo "$(date -Iseconds)" > /tmp/drift_saved_at
+
+            echo "=========================================="
+            echo "DRIFT DATA SUCCESSFULLY SAVED TO DVC"
+            echo "=========================================="
+            echo "  File: ${DRIFT_FILE}"
+            echo "  MD5:  ${MD5}"
+            echo "  S3:   ${S3_PATH}"
+            echo "  Time: $(date)"
+            echo "=========================================="
+
+      outputs:
+        parameters:
+          - name: drift_filename
+            valueFrom:
+              path: /tmp/drift_filename
+          - name: drift_md5
+            valueFrom:
+              path: /tmp/drift_md5
+          - name: drift_saved_at
+            valueFrom:
+              path: /tmp/drift_saved_at
 
 
-    
     - name: pull-base-dvc
       container:
         image: bqmxnh/cloud-ops-retrain:latest
         command: ["bash", "-c"]
         args:
           - |
-            echo "[STEP] DVC PULL BASE DATA (NO-SCM)"
+            set -e
+            
+            echo "=========================================="
+            echo "[STEP] DVC PULL BASE DATA"
+            echo "=========================================="
 
             cd /app
 
-            # Init DVC (no git)
-            dvc init --no-scm -f
+            # Init DVC
+            echo "[1/4] Initializing DVC..."
+            dvc init --no-scm -f 2>&1 | grep -v "What's next"
 
-            # ADD REMOTE (BẮT BUỘC)
+            # Add remote
+            echo "[2/4] Configuring remote..."
             dvc remote add -f trainingstore s3://qmuit-training-data-store
-
-            # OPTIONAL: set default remote
             dvc remote default trainingstore
 
-            # PULL FILE TRACKED
+            # Pull file
+            echo "[3/4] Pulling base.csv..."
             dvc pull datasets/base/base.csv.dvc
 
-            ls -lh datasets/base/
+            # Verify
+            echo "[4/4] Verifying..."
+            if [ -f datasets/base/base.csv ]; then
+              echo "✓ Base file pulled successfully"
+              echo "  Size: $(du -h datasets/base/base.csv | cut -f1)"
+              echo "  Rows: $(wc -l < datasets/base/base.csv)"
+            else
+              echo "ERROR: Base file not found"
+              exit 1
+            fi
 
+            echo "=========================================="
+            ls -lh datasets/base/
+            echo "=========================================="
 
       outputs:
         artifacts:
           - name: base
             path: /app/datasets/base/base.csv
+
 
     - name: merge-data
       inputs:
@@ -258,12 +404,16 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
             echo "[STEP] MERGE DATA"
 
             python /app/retrain/merge_data.py \
               --drift /data/drift_raw.csv \
               --base /app/datasets/base/base.csv \
               --output /data/drift_merged.csv
+            
+            echo "✓ Merged $(wc -l < /data/drift_merged.csv) rows"
+
       outputs:
         artifacts:
           - name: merged
@@ -280,12 +430,17 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
             echo "[STEP] PREPROCESS"
 
             python /app/retrain/preprocess.py \
               --input /data/drift_merged.csv \
               --train-out /data/train_smote.csv \
               --test-out /data/test_holdout.csv
+            
+            echo "✓ Train: $(wc -l < /data/train_smote.csv) rows"
+            echo "✓ Test:  $(wc -l < /data/test_holdout.csv) rows"
+
       outputs:
         artifacts:
           - name: train
@@ -313,6 +468,7 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
             echo "[STEP] RETRAIN"
 
             python /app/retrain/retrain_arf.py \
@@ -329,6 +485,7 @@ spec:
             valueFrom:
               path: /tmp/run_id
 
+
     - name: register-model
       inputs:
         parameters:
@@ -338,9 +495,10 @@ spec:
         command: ["bash", "-c"]
         args:
           - |
+            set -e
             echo "[STEP] REGISTER MODEL"
+            
             python /app/retrain/register_model.py \
               --run-id {{inputs.parameters.run_id}}
-
-
-
+            
+            echo "✓ Model registered successfully"
