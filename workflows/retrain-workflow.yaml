@@ -50,6 +50,7 @@ spec:
 
         - name: save-drift
           dependencies: [fetch-drift]
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: save-drift-dvc
           arguments:
             artifacts:
@@ -58,10 +59,12 @@ spec:
 
         - name: pull-base
           dependencies: [fetch-drift]
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: pull-base-dvc
 
         - name: merge-data
           dependencies: [pull-base, save-drift]
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: merge-data
           arguments:
             artifacts:
@@ -72,6 +75,7 @@ spec:
 
         - name: preprocess
           dependencies: [merge-data]
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: preprocess
           arguments:
             artifacts:
@@ -80,6 +84,7 @@ spec:
 
         - name: retrain
           dependencies: [preprocess]
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: retrain
           arguments:
             artifacts:
@@ -90,7 +95,7 @@ spec:
 
         - name: register-model
           dependencies: [retrain]
-          when: "{{tasks.retrain.outputs.parameters.promote}} == true"
+          when: "{{tasks.check-drift.outputs.parameters.retrain}} == true"
           template: register-model
           arguments:
             parameters:
