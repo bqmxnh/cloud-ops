@@ -12,7 +12,7 @@ import asyncio
 
 
 
-app = FastAPI(title="IDS Drift Detector")
+app = FastAPI(title="Model Inference API", version="9.0")
 
 app.add_middleware(
     CORSMiddleware,
