@@ -65,8 +65,18 @@ def can_retrain():
 def main():
     args = parse_args()
 
+    last_retrain = load_last_retrain_ts()
+
     now = datetime.now(timezone.utc)
     start_ts = int((now - timedelta(hours=args.hours)).timestamp() * 1000)
+
+    # ======================================
+    # CUT LOOKBACK WINDOW BY LAST RETRAIN
+    # ======================================
+    if last_retrain:
+        last_retrain_ms = int(last_retrain.timestamp() * 1000)
+        start_ts = max(start_ts, last_retrain_ms)
+        print(f"[INFO] Last retrain ts : {last_retrain_ms}")
     print(f"[INFO] Lookback window : {args.hours} hours")
     print(f"[INFO] Start timestamp : {start_ts}")
     print(f"[INFO] ADWIN delta     : {args.delta}")
@@ -139,17 +149,36 @@ def main():
     if first_drift_ts:
         print("DRIFT=true")
         print(f"FIRST_DRIFT_TS={first_drift_ts}")
+
         if second_drift_ts:
             print(f"SECOND_DRIFT_TS={second_drift_ts}")
         else:
-            # fallback: end at latest observed timestamp
             print(f"SECOND_DRIFT_TS={items[-1]['timestamp']}")
+
+        # ======================================
+        # BLOCK RETRAIN IF DRIFT IS OLD
+        # ======================================
+        if last_retrain:
+            last_retrain_ms = int(last_retrain.timestamp() * 1000)
+
+            if first_drift_ts <= last_retrain_ms:
+                print("[INFO] Drift already handled by last retrain")
+                print(f"[INFO] Drift ts     : {first_drift_ts}")
+                print(f"[INFO] Last retrain : {last_retrain_ms}")
+
+                print("RETRAIN=false")
+                sys.exit(EXIT_NO_DRIFT)
+
+        # ======================================
+        # COOLDOWN CHECK
+        # ======================================
         if can_retrain():
             print("RETRAIN=true")
             sys.exit(EXIT_DRIFT)
         else:
             print("RETRAIN=false")
             sys.exit(EXIT_NO_DRIFT)
+
 
     print("DRIFT=false")
     print("RETRAIN=false")
