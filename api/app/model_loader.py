@@ -16,8 +16,6 @@ from app.websocket import broadcast
 # CONFIG
 # ============================================================
 MLFLOW_TRACKING_URI = "https://mlflow.qmuit.id.vn"
-AUTO_DETECT_MODEL = os.getenv("AUTO_DETECT_MODEL", "true").lower() == "true"
-MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")  # Used if AUTO_DETECT_MODEL=false
 MODEL_STAGE = "Production"
 
 BUCKET = os.getenv("MODEL_BUCKET", "arf-ids-model-bucket")
@@ -33,17 +31,22 @@ client = MlflowClient()
 # Auto-detect Production model
 # ============================================================
 def auto_detect_production_model():
-    """Find any model with version in Production stage."""
+    """Find the model with version in Production stage (only 1 at a time)."""
     try:
         registered_models = client.search_registered_models()
+        
         for model in registered_models:
             for version in model.latest_versions:
                 if version.current_stage == "Production":
                     print(f"[AUTO-DETECT] Found Production model: {model.name} (v{version.version})")
                     return model.name
+        
+        print("[AUTO-DETECT] No model found in Production stage")
+        return None
+        
     except Exception as e:
         print(f"[AUTO-DETECT] Error: {e}")
-    return None
+        return None
 
 
 # ============================================================
@@ -99,14 +102,11 @@ def load_from_s3(name: str):
 def init_model():
     print("[INIT] Loading model...")
 
-    # Auto-detect model if enabled
-    active_model_name = MODEL_NAME
-    if AUTO_DETECT_MODEL:
-        detected = auto_detect_production_model()
-        if detected:
-            active_model_name = detected
-        else:
-            print(f"[AUTO-DETECT] Failed, fallback to: {MODEL_NAME}")
+    # Auto-detect which model is in Production
+    active_model_name = auto_detect_production_model()
+    if not active_model_name:
+        print("[INIT] ERROR: No Production model found!")
+        return
 
     new_version = get_production_version(active_model_name)
 
@@ -144,17 +144,15 @@ def init_model():
 # Background auto-refresh worker
 # ============================================================
 def auto_refresh_worker():
-    """Tự kiểm tra version MLflow mỗi 60s."""
+    """Tự kiểm tra version MLflow mỗi 10s."""
     while True:
         time.sleep(CHECK_INTERVAL)
 
         try:
-            # Auto-detect model if enabled
-            active_model_name = MODEL_NAME
-            if AUTO_DETECT_MODEL:
-                detected = auto_detect_production_model()
-                if detected:
-                    active_model_name = detected
+            # Auto-detect which model is in Production
+            active_model_name = auto_detect_production_model()
+            if not active_model_name:
+                continue
             
             new_version = get_production_version(active_model_name)
 
