@@ -108,6 +108,7 @@ def init_model():
         print("[INIT] ERROR: No Production model found!")
         return
 
+    print(f"[INIT] Using model: {active_model_name}")
     new_version = get_production_version(active_model_name)
 
     with G.model_lock:
@@ -124,7 +125,7 @@ def init_model():
                 G.model_reload_count += 1
                 MODEL_RELOAD_COUNT.inc()
 
-                print(f"[MODEL] LOADED from MLflow (v{new_version})")
+                print(f"[MODEL] LOADED from MLflow: {active_model_name} (v{new_version})")
                 return
         except Exception as e:
             print(f"[MODEL] Registry corrupted: {e}")
@@ -157,7 +158,7 @@ def auto_refresh_worker():
             new_version = get_production_version(active_model_name)
 
             if new_version and new_version != G.current_model_version:
-                print(f"\n[MODEL] Detected new Production version {new_version}")
+                print(f"\n[MODEL] Detected new Production version {new_version} from {active_model_name}")
                 init_model()
 
                 # Notify UI
