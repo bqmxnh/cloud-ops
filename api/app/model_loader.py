@@ -16,6 +16,7 @@ from app.websocket import broadcast
 # CONFIG
 # ============================================================
 MLFLOW_TRACKING_URI = "https://mlflow.qmuit.id.vn"
+MODEL_NAME = "HAT Baseline Model"
 MODEL_STAGE = "Production"
 
 BUCKET = os.getenv("MODEL_BUCKET", "arf-ids-model-bucket")
@@ -28,57 +29,16 @@ client = MlflowClient()
 
 
 # ============================================================
-# Auto-detect Production model
-# ============================================================
-def auto_detect_production_model():
-    """
-    Check ARF, KNN, HAT baselines.
-    If multiple are in Production, prefer ARF.
-    """
-    baseline_models = ["ARF Baseline Model", "KNN Baseline Model", "HAT Baseline Model"]
-    production_models = []
-    
-    try:
-        for model_name in baseline_models:
-            try:
-                versions = client.get_latest_versions(model_name, stages=["Production"])
-                if versions:
-                    v = versions[0]
-                    production_models.append(model_name)
-                    print(f"[AUTO-DETECT] Found Production: {model_name} (v{v.version})")
-            except:
-                pass
-        
-        if not production_models:
-            print("[AUTO-DETECT] No baseline model found in Production stage")
-            return None
-        
-        # If multiple models in Production, prefer ARF
-        if len(production_models) > 1:
-            print(f"[AUTO-DETECT] Multiple models in Production: {production_models}")
-            if "ARF Baseline Model" in production_models:
-                print("[AUTO-DETECT] Preferring: ARF Baseline Model")
-                return "ARF Baseline Model"
-        
-        # Return the one (or first one if somehow multiple)
-        return production_models[0]
-        
-    except Exception as e:
-        print(f"[AUTO-DETECT] Error: {e}")
-        return None
-
-
-# ============================================================
 # Load from MLflow Registry
 # ============================================================
-def get_production_version(model_name):
+def get_production_version():
     try:
-        versions = client.get_latest_versions(model_name, stages=["Production"])
+        versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
         if not versions:
             return None
         return int(versions[0].version)
     except Exception as e:
-        print(f"[MLFLOW] Cannot fetch production version for {model_name}: {e}")
+        print(f"[MLFLOW] Cannot fetch production version: {e}")
         return None
 
 
@@ -121,17 +81,10 @@ def load_from_s3(name: str):
 def init_model():
     print("[INIT] Loading model...")
 
-    # Auto-detect which model is in Production
-    active_model_name = auto_detect_production_model()
-    if not active_model_name:
-        print("[INIT] ERROR: No Production model found!")
-        return
-
-    print(f"[INIT] Using model: {active_model_name}")
-    new_version = get_production_version(active_model_name)
+    new_version = get_production_version()
 
     with G.model_lock:
-        registry_dir = load_from_registry(active_model_name, MODEL_STAGE)
+        registry_dir = load_from_registry(MODEL_NAME, MODEL_STAGE)
 
         try:
             if registry_dir:
@@ -144,7 +97,7 @@ def init_model():
                 G.model_reload_count += 1
                 MODEL_RELOAD_COUNT.inc()
 
-                print(f"[MODEL] LOADED from MLflow: {active_model_name} (v{new_version})")
+                print(f"[MODEL] LOADED from MLflow (v{new_version})")
                 return
         except Exception as e:
             print(f"[MODEL] Registry corrupted: {e}")
@@ -164,20 +117,15 @@ def init_model():
 # Background auto-refresh worker
 # ============================================================
 def auto_refresh_worker():
-    """Tự kiểm tra version MLflow mỗi 10s."""
+    """Tự kiểm tra version MLflow mỗi 60s."""
     while True:
         time.sleep(CHECK_INTERVAL)
 
         try:
-            # Auto-detect which model is in Production
-            active_model_name = auto_detect_production_model()
-            if not active_model_name:
-                continue
-            
-            new_version = get_production_version(active_model_name)
+            new_version = get_production_version()
 
             if new_version and new_version != G.current_model_version:
-                print(f"\n[MODEL] Detected new Production version {new_version} from {active_model_name}")
+                print(f"\n[MODEL] Detected new Production version {new_version}")
                 init_model()
 
                 # Notify UI
