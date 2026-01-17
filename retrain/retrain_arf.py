@@ -21,8 +21,9 @@ def parse_args():
     ap = argparse.ArgumentParser("Incremental Retrain ARF (Production → Staging)")
     ap.add_argument("--train", required=True, help="train_smote.csv")
     ap.add_argument("--test", required=True, help="test_holdout.csv")
-    ap.add_argument("--add-ratio", type=float, default=0.4)
+    ap.add_argument("--add-ratio", type=float, default=None, help="Tree ratio (auto-tuned if not specified)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--tune", action="store_true", help="Grid search for optimal add-ratio")
     return ap.parse_args()
 
 
@@ -61,6 +62,105 @@ def load_from_registry(model_name, stage):
 
 
 # ============================================================
+# GRID SEARCH FOR OPTIMAL ADD-RATIO
+# ============================================================
+def grid_search_add_ratio(model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test, ratios=[0.1, 0.2, 0.3, 0.4, 0.5]):
+    """Test multiple add-ratios and return the best one with metrics."""
+    print("\n[GRID SEARCH] Tuning add-ratio...")
+    print(f"Testing ratios: {ratios}\n")
+    
+    results = []
+    
+    for ratio in ratios:
+        print(f"{'='*70}")
+        print(f"Testing add-ratio: {ratio} ({int(ratio*100)}%)")
+        print(f"{'='*70}")
+        
+        # Deep copy for this trial
+        model = copy.deepcopy(model_base)
+        model._rng = random.Random()
+        
+        num_old = len(model.models)
+        num_add = int(num_old * ratio)
+        
+        print(f"  Adding {num_add} new trees to {num_old} existing...")
+        
+        def create_new_tree(params):
+            return tree.HoeffdingTreeClassifier(
+                grace_period=params["grace_period"],
+                split_criterion=params["split_criterion"],
+                leaf_prediction=params["leaf_prediction"],
+                binary_split=params["binary_split"],
+                max_depth=params["max_depth"]
+            )
+        
+        for _ in range(num_add):
+            model.models.append(create_new_tree(BEST_PARAMS))
+            model._metrics.append(metrics.Accuracy())
+            model._background.append(None)
+            model._warning_detectors.append(
+                drift.ADWIN(delta=BEST_PARAMS["drift_confidence"])
+            )
+            model._drift_detectors.append(
+                drift.ADWIN(delta=BEST_PARAMS["drift_confidence"])
+            )
+            idx = len(model.models) - 1
+            model._warning_tracker[idx] = 0
+            model._drift_tracker[idx] = 0
+        
+        # Train
+        print(f"  Training on {len(df_train)} samples...")
+        t0 = time.time()
+        for i, row in df_train.iterrows():
+            xi = {k: row[k] for k in FEATURE_ORDER}
+            yi = row["Label"]
+            xi_scaled = scaler.transform_one(xi)
+            model.learn_one(xi_scaled, yi)
+        train_time = time.time() - t0
+        
+        # Evaluate
+        print(f"  Evaluating on {len(df_test)} samples...")
+        f1_score = metrics.F1()
+        kappa_score = metrics.CohenKappa()
+        
+        for _, row in df_test.iterrows():
+            x = {k: row[k] for k in FEATURE_ORDER}
+            y = row["Label"]
+            y_pred = model.predict_one(scaler.transform_one(x))
+            if y_pred is not None:
+                f1_score.update(y, y_pred)
+                kappa_score.update(y, y_pred)
+        
+        f1_val = f1_score.get()
+        kappa_val = kappa_score.get()
+        
+        print(f"  F1:    {f1_val:.6f}")
+        print(f"  KAPPA: {kappa_val:.6f}")
+        print(f"  TIME:  {train_time:.2f}s\n")
+        
+        results.append({
+            "ratio": ratio,
+            "f1": f1_val,
+            "kappa": kappa_val,
+            "train_time": train_time,
+            "n_trees": len(model.models)
+        })
+    
+    # Find best by F1 score
+    best = max(results, key=lambda x: x["f1"])
+    
+    print(f"\n{'='*70}")
+    print("GRID SEARCH RESULTS")
+    print(f"{'='*70}")
+    for r in sorted(results, key=lambda x: x["f1"], reverse=True):
+        marker = " ← BEST" if r == best else ""
+        print(f"  Ratio {r['ratio']:.1f}: F1={r['f1']:.6f}, KAPPA={r['kappa']:.6f}, Time={r['train_time']:.1f}s{marker}")
+    print(f"{'='*70}\n")
+    
+    return best["ratio"], results
+
+
+# ============================================================
 # MAIN
 # ============================================================
 def main():
@@ -79,6 +179,21 @@ def main():
 
     print(f"✔ Trees before retrain: {len(model_base.models)}")
     print(f"✔ Classes: {encoder.classes_}")
+
+    # --------------------------------------------------------
+    # GRID SEARCH OR USE PROVIDED RATIO
+    # --------------------------------------------------------
+    if args.tune or args.add_ratio is None:
+        print("\n[TUNING] Grid searching for optimal add-ratio...")
+        best_ratio, tuning_results = grid_search_add_ratio(
+            model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test,
+            ratios=[0.1, 0.2, 0.3, 0.4, 0.5]
+        )
+        print(f"[TUNING] Optimal add-ratio: {best_ratio}")
+        args.add_ratio = best_ratio
+    else:
+        tuning_results = []
+        print(f"[CONFIG] Using provided add-ratio: {args.add_ratio}")
 
     # --------------------------------------------------------
     # DEEP COPY PRODUCTION MODEL FOR BASELINE COMPARISON
@@ -101,7 +216,7 @@ def main():
     print(f"✔ Test : {len(df_test)}")
 
     # --------------------------------------------------------
-    # ADD NEW TREES
+    # ADD NEW TREES (FINAL TRAINING WITH BEST RATIO)
     # --------------------------------------------------------
     model = model_base
     model._rng = random.Random()
@@ -233,6 +348,13 @@ def main():
         mlflow.log_param("n_trees_before", num_old)
         mlflow.log_param("n_trees_after", len(model.models))
         mlflow.log_param("source_stage", "Production")
+        
+        # Log tuning results if available
+        if tuning_results:
+            mlflow.log_param("tuning_enabled", True)
+            for i, result in enumerate(tuning_results):
+                mlflow.log_metric(f"tuning_f1_ratio_{result['ratio']}", result['f1'])
+                mlflow.log_metric(f"tuning_kappa_ratio_{result['ratio']}", result['kappa'])
 
         mlflow.log_artifact("model.pkl")
         mlflow.log_artifact("scaler.pkl")
