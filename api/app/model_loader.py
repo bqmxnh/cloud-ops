@@ -16,7 +16,7 @@ from app.websocket import broadcast
 # CONFIG
 # ============================================================
 MLFLOW_TRACKING_URI = "https://mlflow.qmuit.id.vn"
-MODEL_NAME = "HAT Baseline Model"
+MODEL_NAME = "ARF Baseline Model"
 MODEL_STAGE = "Production"
 
 BUCKET = os.getenv("MODEL_BUCKET", "arf-ids-model-bucket")
