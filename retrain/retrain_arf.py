@@ -64,8 +64,17 @@ def load_from_registry(model_name, stage):
 # ============================================================
 # GRID SEARCH FOR OPTIMAL ADD-RATIO
 # ============================================================
-def grid_search_add_ratio(model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test, ratios=[0.1, 0.2, 0.3, 0.4, 0.5]):
-    """Test multiple add-ratios and return the best one with metrics."""
+def grid_search_add_ratio(model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test, ratios=None):
+    """Test multiple add-ratios and return the best one with composite score.
+    
+    Composite score prioritizes:
+    - F1 score (60% weight)
+    - Kappa score (30% weight)  
+    - Training time (10% weight, lower is better)
+    """
+    if ratios is None:
+        ratios = [round(x * 0.1, 1) for x in range(1, 11)]  # 0.1, 0.2, ..., 1.0
+    
     print("\n[GRID SEARCH] Tuning add-ratio...")
     print(f"Testing ratios: {ratios}\n")
     
@@ -146,16 +155,36 @@ def grid_search_add_ratio(model_base, scaler, encoder, FEATURE_ORDER, df_train, 
             "n_trees": len(model.models)
         })
     
-    # Find best by F1 score
-    best = max(results, key=lambda x: x["f1"])
+    # Normalize metrics for composite scoring
+    f1_values = [r["f1"] for r in results]
+    kappa_values = [r["kappa"] for r in results]
+    time_values = [r["train_time"] for r in results]
     
-    print(f"\n{'='*70}")
-    print("GRID SEARCH RESULTS")
-    print(f"{'='*70}")
-    for r in sorted(results, key=lambda x: x["f1"], reverse=True):
+    f1_min, f1_max = min(f1_values), max(f1_values)
+    kappa_min, kappa_max = min(kappa_values), max(kappa_values)
+    time_min, time_max = min(time_values), max(time_values)
+    
+    # Calculate composite score: F1(60%) + Kappa(30%) + InverseTime(10%)
+    for r in results:
+        f1_norm = (r["f1"] - f1_min) / (f1_max - f1_min) if f1_max > f1_min else 0.5
+        kappa_norm = (r["kappa"] - kappa_min) / (kappa_max - kappa_min) if kappa_max > kappa_min else 0.5
+        time_norm = (r["train_time"] - time_min) / (time_max - time_min) if time_max > time_min else 0.5
+        
+        r["score"] = 0.60 * f1_norm + 0.30 * kappa_norm + 0.10 * (1 - time_norm)
+    
+    # Find best by composite score
+    best = max(results, key=lambda x: x["score"])
+    
+    print(f"\n{'='*80}")
+    print("GRID SEARCH RESULTS (ranked by composite score)")
+    print(f"{'='*80}")
+    print(f"{'Ratio':<8} {'F1':<10} {'KAPPA':<10} {'TIME':<10} {'SCORE':<10} {'Status':<10}")
+    print(f"{'-'*80}")
+    
+    for r in sorted(results, key=lambda x: x["score"], reverse=True):
         marker = " ← BEST" if r == best else ""
-        print(f"  Ratio {r['ratio']:.1f}: F1={r['f1']:.6f}, KAPPA={r['kappa']:.6f}, Time={r['train_time']:.1f}s{marker}")
-    print(f"{'='*70}\n")
+        print(f"  {r['ratio']:<7.1f} {r['f1']:<9.6f} {r['kappa']:<9.6f} {r['train_time']:<9.2f}s {r['score']:<9.6f}{marker}")
+    print(f"{'='*80}\n")
     
     return best["ratio"], results
 
