@@ -210,13 +210,25 @@ def main():
     print(f"✔ Classes: {encoder.classes_}")
 
     # --------------------------------------------------------
+    # LOAD DATA (BEFORE GRID SEARCH)
+    # --------------------------------------------------------
+    df_train = pd.read_csv(args.train)
+    df_test = pd.read_csv(args.test)
+
+    df_train["Label"] = encoder.transform(df_train["Label"])
+    df_test["Label"] = encoder.transform(df_test["Label"])
+
+    print("\n[SPLIT]")
+    print(f"✔ Train: {len(df_train)}")
+    print(f"✔ Test : {len(df_test)}")
+
+    # --------------------------------------------------------
     # GRID SEARCH OR USE PROVIDED RATIO
     # --------------------------------------------------------
     if args.tune or args.add_ratio is None:
         print("\n[TUNING] Grid searching for optimal add-ratio...")
         best_ratio, tuning_results = grid_search_add_ratio(
-            model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test,
-            ratios=[0.1, 0.2, 0.3, 0.4, 0.5]
+            model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test
         )
         print(f"[TUNING] Optimal add-ratio: {best_ratio}")
         args.add_ratio = best_ratio
@@ -232,20 +244,6 @@ def main():
     print(f"✔ Baseline snapshot has {len(model_prod_snapshot.models)} trees")
 
     # --------------------------------------------------------
-    # LOAD DATA
-    # --------------------------------------------------------
-    df_train = pd.read_csv(args.train)
-    df_test = pd.read_csv(args.test)
-
-    df_train["Label"] = encoder.transform(df_train["Label"])
-    df_test["Label"] = encoder.transform(df_test["Label"])
-
-    print("\n[SPLIT]")
-    print(f"✔ Train: {len(df_train)}")
-    print(f"✔ Test : {len(df_test)}")
-
-    # --------------------------------------------------------
-    # ADD NEW TREES (FINAL TRAINING WITH BEST RATIO)
     # --------------------------------------------------------
     model = model_base
     model._rng = random.Random()
