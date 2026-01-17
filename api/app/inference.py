@@ -4,6 +4,7 @@ from app.schemas import FlowSchema
 from app import globals as G
 from app.websocket import broadcast
 from app.metrics import PRED_COUNT, LATENCY
+from app.utils.preprocess import sanitize
 import time
 import asyncio
 import math
@@ -79,7 +80,9 @@ async def predict(flow: FlowSchema):
     if flow.flow_id not in G.prediction_events:
         G.prediction_events[flow.flow_id] = asyncio.Event()
 
-    x_scaled = G.scaler.transform_one(flow.features)
+    # Sanitize input features
+    clean_features = sanitize(flow.features)
+    x_scaled = G.scaler.transform_one(clean_features)
 
     proba = predict_proba_confident(
         G.model,

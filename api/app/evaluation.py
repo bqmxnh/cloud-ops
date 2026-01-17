@@ -4,6 +4,7 @@ import io
 
 from river import metrics
 from app import globals as G
+from app.utils.preprocess import sanitize
 
 router = APIRouter()
 
@@ -58,7 +59,8 @@ async def evaluate(file: UploadFile = File(...)):
         # ----- FEATURES -----
         try:
             x_raw = row.drop(label_col).to_dict()
-            x = {k: float(x_raw[k]) for k in G.FEATURE_ORDER}
+            # Use sanitize for consistent data handling
+            x = sanitize({k: x_raw[k] for k in G.FEATURE_ORDER})
         except Exception:
             continue
 

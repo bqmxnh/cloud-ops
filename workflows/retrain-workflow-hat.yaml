@@ -465,10 +465,10 @@ spec:
         image: bqmxnh/cloud-ops-retrain:latest
         resources:
           requests:
-            memory: "2Gi"
+            memory: "4Gi"
             cpu: "1"
           limits:
-            memory: "4Gi"
+            memory: "8Gi"
             cpu: "2"
         command: ["bash", "-c"]
         args:
