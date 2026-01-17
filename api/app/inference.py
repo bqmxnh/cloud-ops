@@ -20,25 +20,50 @@ def predict_proba_confident(model, x, entropy_th=0.25, min_trees=3):
     Aggregate probabilities only from confident trees (low entropy).
     Fallback to full ensemble if not enough trees are confident.
     """
+    # If the model is not an ensemble with `models` (e.g., KNN, HAT),
+    # just return its probability prediction directly.
+    if not hasattr(model, "models") or model.models is None:
+        try:
+            return model.predict_proba_one(x) or {}
+        except Exception:
+            return {}
+
     agg = defaultdict(float)
     used = 0
 
-    # ARFClassifier keeps base models here
-    for tree in model.models:
-        p = tree.predict_proba_one(x)
-        if not p:
-            continue
+    # ARFClassifier keeps base models in `models`
+    try:
+        for tree in model.models:
+            p = tree.predict_proba_one(x)
+            if not p:
+                continue
 
-        if entropy(p) < entropy_th:
-            for k, v in p.items():
-                agg[k] += v
-            used += 1
+            if entropy(p) < entropy_th:
+                for k, v in p.items():
+                    agg[k] += v
+                used += 1
+    except Exception:
+        # If anything goes wrong, fall back to model-level probability
+        try:
+            return model.predict_proba_one(x) or {}
+        except Exception:
+            return {}
 
     # Fallback if not enough confident trees
     if used < min_trees:
-        return model.predict_proba_one(x)
+        try:
+            return model.predict_proba_one(x) or {}
+        except Exception:
+            return {}
 
     s = sum(agg.values())
+    if s == 0:
+        # Avoid division by zero; fall back to model-level probability
+        try:
+            return model.predict_proba_one(x) or {}
+        except Exception:
+            return {}
+
     return {k: v / s for k, v in agg.items()}
 
 
