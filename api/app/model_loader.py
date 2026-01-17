@@ -16,7 +16,8 @@ from app.websocket import broadcast
 # CONFIG
 # ============================================================
 MLFLOW_TRACKING_URI = "https://mlflow.qmuit.id.vn"
-MODEL_NAME = "ARF Baseline Model"
+AUTO_DETECT_MODEL = os.getenv("AUTO_DETECT_MODEL", "true").lower() == "true"
+MODEL_NAME = os.getenv("MODEL_NAME", "ARF Baseline Model")  # Used if AUTO_DETECT_MODEL=false
 MODEL_STAGE = "Production"
 
 BUCKET = os.getenv("MODEL_BUCKET", "arf-ids-model-bucket")
@@ -29,16 +30,33 @@ client = MlflowClient()
 
 
 # ============================================================
+# Auto-detect Production model
+# ============================================================
+def auto_detect_production_model():
+    """Find any model with version in Production stage."""
+    try:
+        registered_models = client.search_registered_models()
+        for model in registered_models:
+            for version in model.latest_versions:
+                if version.current_stage == "Production":
+                    print(f"[AUTO-DETECT] Found Production model: {model.name} (v{version.version})")
+                    return model.name
+    except Exception as e:
+        print(f"[AUTO-DETECT] Error: {e}")
+    return None
+
+
+# ============================================================
 # Load from MLflow Registry
 # ============================================================
-def get_production_version():
+def get_production_version(model_name):
     try:
-        versions = client.get_latest_versions(MODEL_NAME, stages=["Production"])
+        versions = client.get_latest_versions(model_name, stages=["Production"])
         if not versions:
             return None
         return int(versions[0].version)
     except Exception as e:
-        print(f"[MLFLOW] Cannot fetch production version: {e}")
+        print(f"[MLFLOW] Cannot fetch production version for {model_name}: {e}")
         return None
 
 
@@ -81,10 +99,19 @@ def load_from_s3(name: str):
 def init_model():
     print("[INIT] Loading model...")
 
-    new_version = get_production_version()
+    # Auto-detect model if enabled
+    active_model_name = MODEL_NAME
+    if AUTO_DETECT_MODEL:
+        detected = auto_detect_production_model()
+        if detected:
+            active_model_name = detected
+        else:
+            print(f"[AUTO-DETECT] Failed, fallback to: {MODEL_NAME}")
+
+    new_version = get_production_version(active_model_name)
 
     with G.model_lock:
-        registry_dir = load_from_registry(MODEL_NAME, MODEL_STAGE)
+        registry_dir = load_from_registry(active_model_name, MODEL_STAGE)
 
         try:
             if registry_dir:
@@ -122,7 +149,14 @@ def auto_refresh_worker():
         time.sleep(CHECK_INTERVAL)
 
         try:
-            new_version = get_production_version()
+            # Auto-detect model if enabled
+            active_model_name = MODEL_NAME
+            if AUTO_DETECT_MODEL:
+                detected = auto_detect_production_model()
+                if detected:
+                    active_model_name = detected
+            
+            new_version = get_production_version(active_model_name)
 
             if new_version and new_version != G.current_model_version:
                 print(f"\n[MODEL] Detected new Production version {new_version}")
