@@ -31,18 +31,37 @@ client = MlflowClient()
 # Auto-detect Production model
 # ============================================================
 def auto_detect_production_model():
-    """Find the model with version in Production stage (only 1 at a time)."""
+    """
+    Check ARF, KNN, HAT baselines.
+    If multiple are in Production, prefer ARF.
+    """
+    baseline_models = ["ARF Baseline Model", "KNN Baseline Model", "HAT Baseline Model"]
+    production_models = []
+    
     try:
-        registered_models = client.search_registered_models()
+        for model_name in baseline_models:
+            try:
+                versions = client.get_latest_versions(model_name, stages=["Production"])
+                if versions:
+                    v = versions[0]
+                    production_models.append(model_name)
+                    print(f"[AUTO-DETECT] Found Production: {model_name} (v{v.version})")
+            except:
+                pass
         
-        for model in registered_models:
-            for version in model.latest_versions:
-                if version.current_stage == "Production":
-                    print(f"[AUTO-DETECT] Found Production model: {model.name} (v{version.version})")
-                    return model.name
+        if not production_models:
+            print("[AUTO-DETECT] No baseline model found in Production stage")
+            return None
         
-        print("[AUTO-DETECT] No model found in Production stage")
-        return None
+        # If multiple models in Production, prefer ARF
+        if len(production_models) > 1:
+            print(f"[AUTO-DETECT] Multiple models in Production: {production_models}")
+            if "ARF Baseline Model" in production_models:
+                print("[AUTO-DETECT] Preferring: ARF Baseline Model")
+                return "ARF Baseline Model"
+        
+        # Return the one (or first one if somehow multiple)
+        return production_models[0]
         
     except Exception as e:
         print(f"[AUTO-DETECT] Error: {e}")
