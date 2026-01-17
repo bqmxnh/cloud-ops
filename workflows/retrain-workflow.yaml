@@ -504,6 +504,7 @@ spec:
             echo "[STEP] REGISTER MODEL"
             
             python /app/retrain/register_model.py \
-              --run-id {{inputs.parameters.run_id}}
+              --run-id {{inputs.parameters.run_id}} \
+              --model-type arf
             
             echo "✓ Model registered successfully"

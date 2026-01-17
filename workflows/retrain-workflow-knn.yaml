@@ -465,10 +465,10 @@ spec:
         image: bqmxnh/cloud-ops-retrain:latest
         resources:
           requests:
-            memory: "2Gi"
+            memory: "4Gi"
             cpu: "1"
           limits:
-            memory: "4Gi"
+            memory: "8Gi"
             cpu: "2"
         command: ["bash", "-c"]
         args:
@@ -503,6 +503,7 @@ spec:
             echo "[STEP] REGISTER MODEL"
             
             python /app/retrain/register_model.py \
-              --run-id {{inputs.parameters.run_id}}
+              --run-id {{inputs.parameters.run_id}} \
+              --model-type knn
             
             echo "✓ Model registered successfully"
