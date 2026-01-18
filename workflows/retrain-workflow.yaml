@@ -24,10 +24,6 @@ spec:
           value: "30"
         - name: min_samples
           value: "100"
-        - name: tune_enabled
-          value: "true"           # Set to "false" to use fixed --add-ratio 0.4
-        - name: add_ratio
-          value: "0.4"            # Used only when tune_enabled=false
 
     templates:
 
@@ -480,18 +476,10 @@ spec:
             set -e
             echo "[STEP] RETRAIN"
 
-            # Build command based on tune_enabled parameter
-            CMD="python /app/retrain/retrain_arf.py --train /data/train_smote.csv --test /data/test_holdout.csv"
-            
-            if [ "{{workflow.parameters.tune_enabled}}" = "true" ]; then
-              echo "Mode: TUNING (0.1-1.0 with composite scoring)"
-              CMD="${CMD} --tune"
-            else
-              echo "Mode: FIXED add-ratio {{workflow.parameters.add_ratio}}"
-              CMD="${CMD} --add-ratio {{workflow.parameters.add_ratio}}"
-            fi
-            
-            eval ${CMD}
+            python /app/retrain/retrain_arf.py \
+              --train /data/train_smote.csv \
+              --test /data/test_holdout.csv \
+              --add-ratio 0.4
 
       outputs:
         parameters:

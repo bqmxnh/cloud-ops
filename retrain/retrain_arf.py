@@ -21,9 +21,9 @@ def parse_args():
     ap = argparse.ArgumentParser("Incremental Retrain ARF (Production → Staging)")
     ap.add_argument("--train", required=True, help="train_smote.csv")
     ap.add_argument("--test", required=True, help="test_holdout.csv")
-    ap.add_argument("--add-ratio", type=float, default=None, help="Tree ratio (auto-tuned if not specified)")
+    ap.add_argument("--add-ratio", type=float, default=0.4)
+    ap.add_argument("--max-trees", type=int, default=20, help="Maximum number of trees to keep")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--tune", action="store_true", help="Grid search for optimal add-ratio")
     return ap.parse_args()
 
 
@@ -46,6 +46,70 @@ BEST_PARAMS = {
 
 
 # ============================================================
+# PRUNING HELPERS
+# ============================================================
+def get_tree_accuracies(model):
+    """
+    Get accuracy for each tree in the ensemble.
+    Returns list of (tree_idx, accuracy) tuples.
+    """
+    tree_scores = []
+    for i, metric in enumerate(model._metrics):
+        accuracy = metric.get() if hasattr(metric, 'get') else 0.0
+        tree_scores.append((i, accuracy))
+    return tree_scores
+
+
+def prune_weakest_trees(model, target_count):
+    """
+    Remove the weakest trees to reach target_count.
+    Keeps the trees with highest accuracy scores.
+    """
+    current_count = len(model.models)
+    if current_count <= target_count:
+        print(f"[PRUNE] Current: {current_count}, Target: {target_count} - No pruning needed")
+        return
+    
+    num_to_remove = current_count - target_count
+    print(f"[PRUNE] Current: {current_count}, Target: {target_count}")
+    print(f"[PRUNE] Removing {num_to_remove} weakest trees...")
+    
+    # Get accuracy scores for each tree
+    tree_scores = get_tree_accuracies(model)
+    tree_scores.sort(key=lambda x: x[1])  # Sort by accuracy (ascending)
+    
+    # Get indices of weakest trees to remove
+    indices_to_remove = [idx for idx, _ in tree_scores[:num_to_remove]]
+    indices_to_remove.sort(reverse=True)  # Remove from highest index first
+    
+    print("[PRUNE] Weakest trees (to be removed):")
+    for idx in indices_to_remove:
+        acc = tree_scores[indices_to_remove.index(idx)][1]
+        print(f"  Tree {idx}: Accuracy = {acc:.4f}")
+    
+    # Remove weakest trees
+    for idx in indices_to_remove:
+        model.models.pop(idx)
+        model._metrics.pop(idx)
+        model._background.pop(idx)
+        model._warning_detectors.pop(idx)
+        model._drift_detectors.pop(idx)
+        del model._warning_tracker[idx]
+        del model._drift_tracker[idx]
+    
+    # Rebuild the tracking dictionaries with new indices
+    new_warning_tracker = {}
+    new_drift_tracker = {}
+    for i in range(len(model.models)):
+        new_warning_tracker[i] = 0
+        new_drift_tracker[i] = 0
+    model._warning_tracker = new_warning_tracker
+    model._drift_tracker = new_drift_tracker
+    
+    print(f"[PRUNE] Done. Trees remaining: {len(model.models)}")
+
+
+# ============================================================
 # MLFLOW
 # ============================================================
 MLFLOW_TRACKING_URI = "https://mlflow.qmuit.id.vn"
@@ -59,134 +123,6 @@ def load_from_registry(model_name, stage):
     uri = f"models:/{model_name}/{stage}"
     print(f"[MLFLOW] Loading model from {uri}")
     return mlflow.artifacts.download_artifacts(uri)
-
-
-# ============================================================
-# GRID SEARCH FOR OPTIMAL ADD-RATIO
-# ============================================================
-def grid_search_add_ratio(model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test, ratios=None):
-    """Test multiple add-ratios and return the best one with composite score.
-    
-    Composite score prioritizes:
-    - F1 score (60% weight)
-    - Kappa score (30% weight)  
-    - Training time (10% weight, lower is better)
-    """
-    if ratios is None:
-        ratios = [round(x * 0.1, 1) for x in range(1, 11)]  # 0.1, 0.2, ..., 1.0
-    
-    print("\n[GRID SEARCH] Tuning add-ratio...")
-    print(f"Testing ratios: {ratios}\n")
-    
-    results = []
-    
-    for ratio in ratios:
-        print(f"{'='*70}")
-        print(f"Testing add-ratio: {ratio} ({int(ratio*100)}%)")
-        print(f"{'='*70}")
-        
-        # Deep copy for this trial
-        model = copy.deepcopy(model_base)
-        model._rng = random.Random()
-        
-        num_old = len(model.models)
-        num_add = int(num_old * ratio)
-        
-        print(f"  Adding {num_add} new trees to {num_old} existing...")
-        
-        def create_new_tree(params):
-            return tree.HoeffdingTreeClassifier(
-                grace_period=params["grace_period"],
-                split_criterion=params["split_criterion"],
-                leaf_prediction=params["leaf_prediction"],
-                binary_split=params["binary_split"],
-                max_depth=params["max_depth"]
-            )
-        
-        for _ in range(num_add):
-            model.models.append(create_new_tree(BEST_PARAMS))
-            model._metrics.append(metrics.Accuracy())
-            model._background.append(None)
-            model._warning_detectors.append(
-                drift.ADWIN(delta=BEST_PARAMS["drift_confidence"])
-            )
-            model._drift_detectors.append(
-                drift.ADWIN(delta=BEST_PARAMS["drift_confidence"])
-            )
-            idx = len(model.models) - 1
-            model._warning_tracker[idx] = 0
-            model._drift_tracker[idx] = 0
-        
-        # Train
-        print(f"  Training on {len(df_train)} samples...")
-        t0 = time.time()
-        for i, row in df_train.iterrows():
-            xi = {k: row[k] for k in FEATURE_ORDER}
-            yi = row["Label"]
-            xi_scaled = scaler.transform_one(xi)
-            model.learn_one(xi_scaled, yi)
-        train_time = time.time() - t0
-        
-        # Evaluate
-        print(f"  Evaluating on {len(df_test)} samples...")
-        f1_score = metrics.F1()
-        kappa_score = metrics.CohenKappa()
-        
-        for _, row in df_test.iterrows():
-            x = {k: row[k] for k in FEATURE_ORDER}
-            y = row["Label"]
-            y_pred = model.predict_one(scaler.transform_one(x))
-            if y_pred is not None:
-                f1_score.update(y, y_pred)
-                kappa_score.update(y, y_pred)
-        
-        f1_val = f1_score.get()
-        kappa_val = kappa_score.get()
-        
-        print(f"  F1:    {f1_val:.6f}")
-        print(f"  KAPPA: {kappa_val:.6f}")
-        print(f"  TIME:  {train_time:.2f}s\n")
-        
-        results.append({
-            "ratio": ratio,
-            "f1": f1_val,
-            "kappa": kappa_val,
-            "train_time": train_time,
-            "n_trees": len(model.models)
-        })
-    
-    # Normalize metrics for composite scoring
-    f1_values = [r["f1"] for r in results]
-    kappa_values = [r["kappa"] for r in results]
-    time_values = [r["train_time"] for r in results]
-    
-    f1_min, f1_max = min(f1_values), max(f1_values)
-    kappa_min, kappa_max = min(kappa_values), max(kappa_values)
-    time_min, time_max = min(time_values), max(time_values)
-    
-    # Calculate composite score: F1(60%) + Kappa(30%) + InverseTime(10%)
-    for r in results:
-        f1_norm = (r["f1"] - f1_min) / (f1_max - f1_min) if f1_max > f1_min else 0.5
-        kappa_norm = (r["kappa"] - kappa_min) / (kappa_max - kappa_min) if kappa_max > kappa_min else 0.5
-        time_norm = (r["train_time"] - time_min) / (time_max - time_min) if time_max > time_min else 0.5
-        
-        r["score"] = 0.60 * f1_norm + 0.30 * kappa_norm + 0.10 * (1 - time_norm)
-    
-    # Find best by composite score
-    best = max(results, key=lambda x: x["score"])
-    
-    print(f"\n{'='*80}")
-    print("GRID SEARCH RESULTS (ranked by composite score)")
-    print(f"{'='*80}")
-    print(f"{'Ratio':<8} {'F1':<10} {'KAPPA':<10} {'TIME':<10} {'SCORE':<10} {'Status':<10}")
-    print(f"{'-'*80}")
-    
-    for r in sorted(results, key=lambda x: x["score"], reverse=True):
-        marker = " ← BEST" if r == best else ""
-        print(f"  {r['ratio']:<7.1f} {r['f1']:<9.6f} {r['kappa']:<9.6f} {r['train_time']:<9.2f}s {r['score']:<9.6f}{marker}")
-    print(f"{'='*80}\n")
-    
-    return best["ratio"], results
 
 
 # ============================================================
@@ -210,7 +146,14 @@ def main():
     print(f"✔ Classes: {encoder.classes_}")
 
     # --------------------------------------------------------
-    # LOAD DATA (BEFORE GRID SEARCH)
+    # DEEP COPY PRODUCTION MODEL FOR BASELINE COMPARISON
+    # --------------------------------------------------------
+    print("\n[COPY] Creating production baseline snapshot...")
+    model_prod_snapshot = copy.deepcopy(model_base)
+    print(f"✔ Baseline snapshot has {len(model_prod_snapshot.models)} trees")
+
+    # --------------------------------------------------------
+    # LOAD DATA
     # --------------------------------------------------------
     df_train = pd.read_csv(args.train)
     df_test = pd.read_csv(args.test)
@@ -223,27 +166,7 @@ def main():
     print(f"✔ Test : {len(df_test)}")
 
     # --------------------------------------------------------
-    # GRID SEARCH OR USE PROVIDED RATIO
-    # --------------------------------------------------------
-    if args.tune or args.add_ratio is None:
-        print("\n[TUNING] Grid searching for optimal add-ratio...")
-        best_ratio, tuning_results = grid_search_add_ratio(
-            model_base, scaler, encoder, FEATURE_ORDER, df_train, df_test
-        )
-        print(f"[TUNING] Optimal add-ratio: {best_ratio}")
-        args.add_ratio = best_ratio
-    else:
-        tuning_results = []
-        print(f"[CONFIG] Using provided add-ratio: {args.add_ratio}")
-
-    # --------------------------------------------------------
-    # DEEP COPY PRODUCTION MODEL FOR BASELINE COMPARISON
-    # --------------------------------------------------------
-    print("\n[COPY] Creating production baseline snapshot...")
-    model_prod_snapshot = copy.deepcopy(model_base)
-    print(f"✔ Baseline snapshot has {len(model_prod_snapshot.models)} trees")
-
-    # --------------------------------------------------------
+    # ADD NEW TREES
     # --------------------------------------------------------
     model = model_base
     model._rng = random.Random()
@@ -300,6 +223,14 @@ def main():
             )
 
     print(f"\n[DONE] Training completed in {time.time() - t0:.2f}s")
+
+    # --------------------------------------------------------
+    # PRUNE WEAKEST TREES IF NEEDED
+    # --------------------------------------------------------
+    print(f"\n[PRUNE] Checking if pruning is needed...")
+    print(f"  Current trees: {len(model.models)}")
+    print(f"  Max trees: {args.max_trees}")
+    prune_weakest_trees(model, args.max_trees)
 
     # --------------------------------------------------------
     # EVALUATION — NEW MODEL
@@ -372,16 +303,11 @@ def main():
         mlflow.log_metric("kappa_gain", kappa_gain)
 
         mlflow.log_param("add_ratio", args.add_ratio)
+        mlflow.log_param("max_trees", args.max_trees)
         mlflow.log_param("n_trees_before", num_old)
-        mlflow.log_param("n_trees_after", len(model.models))
+        mlflow.log_param("n_trees_added", num_add)
+        mlflow.log_param("n_trees_after_pruning", len(model.models))
         mlflow.log_param("source_stage", "Production")
-        
-        # Log tuning results if available
-        if tuning_results:
-            mlflow.log_param("tuning_enabled", True)
-            for i, result in enumerate(tuning_results):
-                mlflow.log_metric(f"tuning_f1_ratio_{result['ratio']}", result['f1'])
-                mlflow.log_metric(f"tuning_kappa_ratio_{result['ratio']}", result['kappa'])
 
         mlflow.log_artifact("model.pkl")
         mlflow.log_artifact("scaler.pkl")
