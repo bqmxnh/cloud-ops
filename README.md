@@ -94,8 +94,11 @@ cloud-ops/
 ## Architecture & Data Flow
 
 ### 1. Real-Time Inference Pipeline
-
 **Initialization Phase:**
+
+![MLFlow Registry.](images/2_mlflow_registry.png)
+![Initialization Phase.](images/3_initialization_phase.png)
+
 ```
 app/main.py startup
   ├─ init_model()
@@ -107,6 +110,9 @@ app/main.py startup
 ```
 
 **Prediction Flow:**
+
+![Inference.](images/4_inference.png)
+
 ```
 POST /predict (app/inference.py)
   ├─ Parse request: FlowSchema (features as input)
@@ -135,6 +141,9 @@ POST /predict (app/inference.py)
 ### 2. Data Collection & Labeling
 
 **Production Data Logging:**
+
+![DynamoDB Data.](images/5_dynamodb_data.png)
+
 - Every prediction from the API is logged with metadata (flow_id, features, timestamp)
 - Post-deployment labels (true_label) are collected from external sources and stored in **DynamoDB table `ids_log_system`**
 - This labeled data forms the basis for drift detection and model retraining
