@@ -11,6 +11,9 @@ The base model is trained on CIC-DDoS2019 while CIC-IDS2017 is used to simulate 
 
 ![GitOps-based CI/CD pipeline for deploying ML models on Kubernetes.](images/1_gitops_cicd_pipeline.png)
 
+![Worlflow Overview.](images/6_concept_drift_detection_pipeline.png)
+
+
 The system consists of two independent repositories:
 
 - **[`cloud-ops`](https://github.com/bqmxnh/cloud-ops)** (this repository) — Contains application code, ML pipelines, Docker builds, and Argo CronWorkflows  
@@ -157,7 +160,11 @@ POST /predict (app/inference.py)
 
 ### 3. Drift Detection & Retraining Decision
 
+
 **CronWorkflow Execution (Daily at 03:00 UTC+7):**
+
+![DynamoDB Data.](images/check_drift.png)
+
 
 1. **Check Drift Task** (`retrain/check_drift.py`):
    - Retrieves samples with timestamp ≥ lookback window (e.g., last 24 hours)
@@ -178,6 +185,11 @@ POST /predict (app/inference.py)
 ---
 
 ### 4. Model Retraining Pipeline (Argo CronWorkflow)
+
+![Detailed ArgoWorkflow.](images/7_retraining_pipeline.png)
+
+![Deployed ArgoWorkflow.](images/deployed_argoworkflows.png)
+
 
 The complete retraining workflow executes the following sequential tasks:
 
@@ -233,51 +245,6 @@ The complete retraining workflow executes the following sequential tasks:
 - Creates new model version in MLflow Registry ("ARF Baseline Model")
 - Sets stage to **Staging** (archives previous versions)
 - Prepares for manual or automated promotion to Production
-
----
-
-### 5. Model Update & Deployment
-
-**Model Lifecycle Management:**
-
-```
-MLflow Registry (Source of Truth)
-├─ ARF Baseline Model
-│  ├─ Version N (Stage: Production)
-│  ├─ Version N+1 (Stage: Staging) ← New retrain output
-│  └─ Versions N-1, N-2 (Stage: Archived)
-```
-
-**API Auto-Refresh Mechanism:**
-- Background worker thread (`app/model_loader.py::auto_refresh_worker`) runs every `CHECK_INTERVAL` seconds
-- Polls MLflow Registry for Production model version
-- When new Production version detected:
-  - Downloads model artifacts
-  - Updates global state (model, scaler, encoder)
-  - Increments `MODEL_RELOAD_COUNT`
-  - Broadcasts `model_updated` event via WebSocket
-  - Updates Prometheus gauge `model_version`
-
-**CI/CD Integration (with manifests-cloud-ops):**
-
-1. **Build Pipeline** (`build-api.yml` in `.github/workflows/`):
-   - Triggers on code push or manual dispatch
-   - Builds Docker image for API service
-   - Tags image: `bqmxnh/arf-ids-api:YYYYMMDDHHMMSS`
-   - Pushes to container registry
-   - Triggers update workflow in `manifests-cloud-ops` repo
-
-2. **Deployment Pipeline** (`update-helm.yml` in `manifests-cloud-ops`):
-   - Receives trigger via `workflow_dispatch` or `repository_dispatch`
-   - Updates Helm values file: `values/api/values.yaml` with new image tag
-   - Commits and pushes changes to Git
-
-3. **GitOps Reconciliation** (Argo CD):
-   - Continuously monitors `manifests-cloud-ops` main branch
-   - Detects Helm values changes
-   - Automatically reconciles Kubernetes cluster state
-   - Deploys new container image without manual intervention
-   - Auto-sync + self-healing ensures alignment between Git and cluster
 
 ---
 
