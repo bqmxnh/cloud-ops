@@ -1,16 +1,11 @@
-# Cloud-Ops: Adaptive Random Forest IDS with Drift Detection and Continuous Model Retraining
+# Cloud-Ops: An application of MLOps for real-time DDoS detection with incremental learning on cloud environment
 
 ## Project Overview
+The system is a **machine learning–based Intrusion Detection System (IDS)** that uses the **Adaptive Random Forest (ARF)** algorithm to detect network anomalies. During training, the model employs a **Poisson distribution with parameter λ (lambda)** to determine how many times each incoming sample is used for learning (online bagging). This mechanism helps **improve learning effectiveness when the number of samples is limited** and enhances the model’s generalization ability.
 
-**Cloud-Ops** is a production-grade machine learning system for **Intrusion Detection System (IDS)** powered by **Adaptive Random Forest (ARF)** algorithms. The system is designed to:
+The system also integrates **ADWIN (Adaptive Windowing)** for **concept drift detection**. ADWIN monitors the data stream using a **statistical threshold** to identify significant changes in the data distribution over time. When the detected drift exceeds the threshold, the system recognizes that a distribution shift has occurred.
 
-- **Detect network anomalies in real-time** using ARF models with adaptive learning capabilities
-- **Monitor concept drift** using statistical drift detection (ADWIN algorithm with trend buffer confirmation)
-- **Automatically retrain models** when drift is detected while maintaining a cooldown period
-- **Serve predictions via REST API** with WebSocket support for real-time UI updates
-- **Manage model lifecycle** through MLflow Registry with seamless version management
-- **Maintain reproducibility** through DVC-managed datasets and Kubernetes-based workflow orchestration
-- **Provide observability** via Prometheus metrics and structured logging
+Drift detection is **evaluated on a daily basis**, allowing the system to monitor changes in network behavior over time and update or adapt the model when necessary to maintain detection accuracy.
 
 The system consists of two independent repositories:
 - **`cloud-ops`** (this repository) — Contains application code, ML pipelines, Docker builds, and Argo CronWorkflows
@@ -65,7 +60,6 @@ cloud-ops/
 │   ├── Dockerfile                # MLflow server container
 │   └── requirements.txt           # MLflow dependencies
 │
-├── FLOW_OVERVIEW.txt             # Detailed architecture and data flow documentation
 └── README.md                     # This file
 ```
 
