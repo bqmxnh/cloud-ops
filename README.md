@@ -1,11 +1,13 @@
 # Cloud-Ops: An application of MLOps for real-time DDoS detection with incremental learning on cloud environment
 
 ## Project Overview
-The system is a **machine learning–based Intrusion Detection System (IDS)** that uses the **Adaptive Random Forest (ARF)** algorithm to detect network anomalies. During training, the model employs a **Poisson distribution with parameter λ (lambda)** to determine how many times each incoming sample is used for learning (online bagging). This mechanism helps **improve learning effectiveness when the number of samples is limited** and enhances the model’s generalization ability.
+The system is a **machine learning–based Network Intrusion Detection System (NIDS)** that uses the **Adaptive Random Forest (ARF)** algorithm to detect network anomalies. During training, the model employs a **Poisson distribution with parameter λ (lambda)** to determine how many times each incoming sample is used for learning (online bagging). This mechanism helps **improve learning effectiveness when the number of samples is limited** and enhances the model’s generalization ability.
 
-The system also integrates **ADWIN (Adaptive Windowing)** for **concept drift detection**. ADWIN monitors the data stream using a **statistical threshold** to identify significant changes in the data distribution over time. When the detected drift exceeds the threshold, the system recognizes that a distribution shift has occurred.
+The system also integrates **ADWIN (Adaptive Windowing)** for **concept drift detection**. ADWIN monitors the data stream using a **statistical threshold** to identify significant changes in the prediction error stream over time. When the detected drift exceeds the threshold, the system recognizes that a distribution shift has occurred.
 
 Drift detection is **evaluated on a daily basis**, allowing the system to monitor changes in network behavior over time and update or adapt the model when necessary to maintain detection accuracy.
+
+The base model is trained on CIC-DDoS2019 while CIC-IDS2017 is used to simulate concept drift scenarios.
 
 ![GitOps-based CI/CD pipeline for deploying ML models on Kubernetes.](images/1_gitops_cicd_pipeline.png)
 
@@ -270,128 +272,6 @@ MLflow Registry (Source of Truth)
 
 ---
 
-
-## System Data Flow (End-to-End)
-
-```
-1. INITIALIZATION
-   API Service Startup
-   ├─ Load ARF model from MLflow Registry → /predict ready
-   ├─ Start auto_refresh_worker
-   └─ Expose Prometheus metrics
-
-2. REAL-TIME INFERENCE
-   User/Client Request
-   ├─ POST /predict with network flow
-   ├─ API normalizes features
-   ├─ ARF returns prediction + confidence
-   ├─ Log to DynamoDB (flow_id, features, prediction, timestamp)
-   ├─ Broadcast via WebSocket to UI
-   └─ Return JSON response + HTTP 200
-
-3. LABELS & MONITORING
-   External System
-   ├─ Collect true labels for flows (post-deployment)
-   ├─ Write to DynamoDB (update true_label field)
-   ├─ Dashboard queries DynamoDB for accuracy metrics
-
-4. DAILY DRIFT CHECK (03:00 UTC+7)
-   CronWorkflow Trigger
-   ├─ Query DynamoDB for samples (last 24h)
-   ├─ Apply ADWIN drift detector + trend buffer
-   ├─ If DRIFT=true && cooldown expired → continue
-   └─ Otherwise → exit (no retrain)
-
-5. RETRAINING PIPELINE
-   If Drift Detected
-   ├─ Fetch production samples from DynamoDB (drift_raw.csv)
-   ├─ Save to DVC + push to S3
-   ├─ Pull base dataset (base.csv)
-   ├─ Merge with concept-balanced strategy
-   ├─ Apply SMOTE + stratified split
-   ├─ Incremental train on ARF (add_ratio=0.4)
-   ├─ Evaluate both NEW and PROD models on hold-out set
-   ├─ Compare metrics: F1_gain = F1_new - F1_prod, Kappa_gain = Kappa_new - Kappa_prod
-   ├─ Log metrics to MLflow
-   ├─ If F1_new > F1_prod AND Kappa_new > Kappa_prod → register new version (Staging)
-   └─ Update cooldown timestamp
-
-6. MODEL DEPLOYMENT
-   MLflow Registry Update
-   ├─ Manual or automated promotion to Production
-   ├─ API auto_refresh_worker detects version change
-   ├─ Downloads new model artifacts
-   ├─ Swaps in-memory model
-   └─ Broadcasts model_updated event via WebSocket
-
-7. INFRASTRUCTURE DEPLOYMENT (Optional)
-   Code Push to cloud-ops
-   ├─ GitHub Actions build-api.yml triggers
-   ├─ Build + push container image
-   ├─ Trigger manifests-cloud-ops update workflow
-   ├─ Helm values updated with new image tag
-   ├─ Argo CD detects Git change
-   ├─ Auto-sync reconciles cluster state
-   └─ New API pods rolled out
-```
-
----
-
-## API Endpoints
-
-### Prediction Endpoint
-```
-POST /predict
-Content-Type: application/json
-
-{
-  "flow_id": "flow_12345",
-  "features": [1.2, 3.4, 5.6, ...]  // 20 numeric features
-}
-
-Response (200 OK):
-{
-  "flow_id": "flow_12345",
-  "prediction": "attack",
-  "confidence": 0.95,
-  "latency_ms": 12.34
-}
-```
-
-### Metrics Endpoint
-```
-GET /metrics
-
-Returns Prometheus metrics:
-- prediction_requests_total{endpoint="/predict"} 15234
-- prediction_latency_ms_bucket{le="50"} 14500
-- prediction_latency_ms_bucket{le="100"} 14950
-- model_version 3
-- model_reload_count 2
-```
-
-### Health Check
-```
-GET /
-
-Response:
-{
-  "status": "running",
-  "version": "9.0"
-}
-```
-
-### WebSocket (Real-Time Updates)
-```
-WS /ws
-
-Receives JSON messages:
-{"type": "prediction", "flow_id": "flow_12345", "prediction": "benign"}
-{"type": "model_updated", "version": 3, "reload_count": 2}
-```
-
----
-
 ## Monitoring & Observability
 
 ### Prometheus Metrics
@@ -399,107 +279,10 @@ Receives JSON messages:
 - **prediction_latency_ms** — Prediction response time histogram
 - **model_version** — Current model version in production
 - **model_reload_total** — Number of times model was reloaded
-- **active_websocket_connections** — Connected UI clients
 
-### Logging
-- **Log Location:** Configured via `config/logging.yaml`
-- **Log Levels:** DEBUG, INFO, WARNING, ERROR, CRITICAL
-- **Key Events:**
-  - Model initialization and auto-refresh
-  - Prediction requests (with latency)
-  - WebSocket client connections
-  - Drift detection results
-  - Model registration and promotion
-
-### DynamoDB Monitoring
-- Monitor `ids_log_system` table capacity and latency
-- Query patterns: Recent samples for drift detection
-- Labeling rate: Percentage of predictions that receive true labels
 
 ---
 
-## Development & Local Testing
-
-### Prerequisites
-```bash
-# Python 3.10+ (for local testing)
-python --version
-
-# Docker and Docker Compose
-docker --version
-
-# DVC (for data versioning)
-pip install dvc dvc-s3
-
-# AWS CLI (for S3 access)
-aws --version
-```
-
-### Running API Locally
-```bash
-cd api
-pip install -r requirements.txt
-export MLFLOW_TRACKING_URI=http://localhost:5000
-export MODEL_BUCKET=local-model-bucket
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Running Retrain Pipeline Locally
-```bash
-cd retrain
-pip install -r requirements.retrain_arf.txt
-python check_drift.py     # Drift detection
-python fetch_prod.py      # Fetch drift data
-python merge_data.py      # Merge datasets
-python preprocess.py      # Apply SMOTE
-python retrain_arf.py     # Train model
-python register_model.py  # Register to MLflow
-```
-
----
-
-## Contributing & Best Practices
-
-1. **Code Organization:**
-   - Keep API routes modular in `api/app/` subdirectories
-   - Use Pydantic schemas for request/response validation
-   - Store shared logic in `utils/` modules
-
-2. **Model Development:**
-   - Always log experiments to MLflow (hyperparameters, metrics, artifacts)
-   - Use feature names consistently across preprocessing and training
-   - Validate model on hold-out test set before promotion
-
-3. **Data Management:**
-   - Version datasets with DVC; commit `.dvc` files to Git
-   - Store credentials in environment variables, never in code
-   - Use stratified splits for imbalanced classification tasks
-
-4. **Deployment:**
-   - Update container image tags in Helm values (via manifests-cloud-ops)
-   - Test API changes locally before pushing
-   - Monitor model performance metrics post-deployment
-
----
-
-## Troubleshooting
-
-### Model Not Updating
-- Check MLflow Registry connection: `curl http://mlflow:5000/api/2.0/registered-models/list`
-- Verify S3 bucket access: `aws s3 ls s3://arf-ids-model-bucket/`
-- Check auto_refresh_worker logs for errors
-
-### Drift Detection False Positives
-- Tune ADWIN_DELTA parameter (lower = more sensitive)
-- Increase TREND_BUFFER_SIZE for confirming drift
-- Check data labeling accuracy in DynamoDB
-
-### Retrain Pipeline Failures
-- Verify DynamoDB table has sufficient labeled samples
-- Check S3 permissions for dvc push/pull
-- Ensure feature consistency between old and new data
-
----
 
 ## References
 
@@ -510,12 +293,6 @@ python register_model.py  # Register to MLflow
 - **Kubernetes:** [https://kubernetes.io/](https://kubernetes.io/)
 - **FastAPI:** [https://fastapi.tiangolo.com/](https://fastapi.tiangolo.com/)
 
----
 
-## License & Support
-
-For questions, issues, or contributions, please contact the development team.
-
-**Last Updated:** 2025
 
 
