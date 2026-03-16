@@ -19,7 +19,6 @@ The system consists of two independent repositories:
 - **[`cloud-ops`](https://github.com/bqmxnh/cloud-ops)** (this repository) — Contains application code, ML pipelines, Docker builds, and Argo CronWorkflows  
 - **[`manifests-cloud-ops`](https://github.com/bqmxnh/manifests-cloud-ops)** — Contains Helm charts, Kubernetes manifests, and Infrastructure as Code (GitOps)
 
----
 
 ## Repository Structure
 
@@ -92,8 +91,6 @@ cloud-ops/
 - `boto3`, `s3fs` — S3 data access
 - `dvc`, `dvc-s3` — Dataset versioning and retrieval
 
----
-
 ## Architecture & Data Flow
 
 ### 1. Real-Time Inference Pipeline
@@ -139,7 +136,6 @@ POST /predict (app/inference.py)
 - Histograms: `prediction_latency_ms`
 - Gauges: `model_version`, `model_reload_count`, `active_websocket_connections`
 
----
 
 ### 2. Data Collection & Labeling
 
@@ -156,7 +152,7 @@ POST /predict (app/inference.py)
 - DVC remote is configured to **S3 bucket `qmuit-training-data-store`**
 - `retrain/fetch_prod.py` queries DynamoDB to retrieve recent labeled samples for drift analysis
 
----
+
 
 ### 3. Drift Detection & Retraining Decision
 
@@ -182,7 +178,6 @@ POST /predict (app/inference.py)
    - Ensures minimum interval between retraining cycles
    - Automatically updated when retrain pipeline completes successfully
 
----
 
 ### 4. Model Retraining Pipeline (Argo CronWorkflow)
 
@@ -246,9 +241,8 @@ The complete retraining workflow executes the following sequential tasks:
 - Sets stage to **Staging** (archives previous versions)
 - Prepares for manual or automated promotion to Production
 
----
 
-## Monitoring & Observability
+## Monitoring
 
 ### Prometheus Metrics
 - **prediction_requests_total** — Total predictions served
@@ -256,9 +250,53 @@ The complete retraining workflow executes the following sequential tasks:
 - **model_version** — Current model version in production
 - **model_reload_total** — Number of times model was reloaded
 
+## Experimental Results
+
+### Concept Drift Evaluation Scenario
+
+To evaluate the effectiveness of the proposed incremental learning mechanism, we design a **two-stage evaluation scenario**.
+
+**Stage 1 — Base Model Training**
+
+The base model is initially trained on approximately **1.6 million samples** from the **CIC-DDoS2019 dataset**.  
+This stage represents the **original network traffic distribution**, allowing the model to learn stable attack and benign traffic patterns before deployment.
+
+**Stage 2 — Drift Adaptation Test**
+
+To simulate **concept drift**, samples from the **CIC-IDS2017 dataset** are introduced as a new data stream.  
+Instead of using a large dataset, the experiment intentionally limits the drift data to **500 samples** in order to evaluate **how quickly the model can adapt under limited data conditions**.
+
+![Detailed ArgoWorkflow.](images/error_rate.png)
+
+
+During this stage:
+
+- The model performs **online prediction for each incoming sample**
+- The **ADWIN drift detector** monitors the **prediction error stream**
+- When drift is detected, **incremental learning is triggered**
+- The model updates its ensemble without retraining from scratch
+
+This setup allows us to measure how well different streaming models can **retain previous knowledge while adapting to new attack patterns with only a small number of samples**.
 
 ---
 
+### Incremental Learning Performance Comparison
+
+| Model | Retention (%) | Forgetting (%) | Adaptation (%) |
+|------|---------------|---------------|---------------|
+| KNN | 93.90 | 6.10 | 26.02 |
+| HAT | 88.96 | 11.04 | 20.05 |
+| **ARF (Proposed Model)** | **98.79** | **1.21** | **77.30** |
+
+---
+
+### Observation
+
+- **ARF achieves the highest retention (98.79%)**, indicating strong capability in preserving previously learned knowledge.
+- **Forgetting is minimal (1.21%)**, demonstrating strong resistance to catastrophic forgetting.
+- **Adaptation performance (77.30%) significantly outperforms KNN and HAT**, showing that ARF adapts effectively even when only **500 drift samples** are available.
+
+These results confirm that **Adaptive Random Forest is highly suitable for incremental learning in real-time DDoS detection systems**, particularly in environments where new attack patterns may appear with limited labeled data.
 
 ## References
 
