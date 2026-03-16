@@ -7,9 +7,12 @@ The system also integrates **ADWIN (Adaptive Windowing)** for **concept drift de
 
 Drift detection is **evaluated on a daily basis**, allowing the system to monitor changes in network behavior over time and update or adapt the model when necessary to maintain detection accuracy.
 
+![GitOps-based CI/CD pipeline for deploying ML models on Kubernetes.](images/1_gitops_cicd_pipeline.png)
+
 The system consists of two independent repositories:
-- **`cloud-ops`** (this repository) — Contains application code, ML pipelines, Docker builds, and Argo CronWorkflows
-- **`manifests-cloud-ops`** — Contains Helm charts, Kubernetes manifests, and Infrastructure as Code (GitOps)
+
+- **[`cloud-ops`](https://github.com/bqmxnh/cloud-ops)** (this repository) — Contains application code, ML pipelines, Docker builds, and Argo CronWorkflows  
+- **[`manifests-cloud-ops`](https://github.com/bqmxnh/manifests-cloud-ops)** — Contains Helm charts, Kubernetes manifests, and Infrastructure as Code (GitOps)
 
 ---
 
