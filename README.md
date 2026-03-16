@@ -222,7 +222,7 @@ The complete retraining workflow executes the following sequential tasks:
 **Task 6: retrain** (`retrain/retrain_arf.py`)
 - Loads current Production model from MLflow Registry and creates a baseline snapshot for comparison
 - Incremental training configuration:
-  - `add_ratio=0.4` — Adds 40% new trees to existing ensemble
+  - `add_ratio=0.4` — Adds 40% new trees to existing ensemble (optional)
   - Uses original feature scaler for consistency
   - Trains on preprocessed balanced dataset
 - Evaluation metrics computed on hold-out test set:
